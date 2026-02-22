@@ -1,0 +1,14 @@
+seed: 42
+
+data:
+  dataset_name: "ieee_cis"
+  raw_path: "data/raw/ieee-cis"
+  processed_path: "data/processed"
+
+split:
+  val_ratio: 0.2
+  test_ratio: 0.2
+  time_column: "TransactionDT"
+
+target:
+  name: "isFraud"

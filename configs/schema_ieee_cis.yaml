@@ -1,0 +1,11 @@
+columns:
+  transaction_id: "TransactionID"
+  time: "TransactionDT"
+  target: "isFraud"
+
+entities:
+  card: "card1"
+  email_p: "P_emaildomain"
+  email_r: "R_emaildomain"
+  addr1: "addr1"
+  addr2: "addr2"
