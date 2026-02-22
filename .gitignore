@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & generated artifacts (не коммитим)
+data/raw/
+data/processed/
+data/splits/
+artifacts/
+reports/
+
+# Logs
+*.log
