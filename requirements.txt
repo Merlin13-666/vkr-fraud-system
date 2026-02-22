@@ -5,3 +5,4 @@ pyyaml
 joblib
 matplotlib
 tqdm
+pyarrow

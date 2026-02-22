@@ -1,14 +1,15 @@
 seed: 42
 
+schema_path: "configs/schema_ieee_cis.yaml"
+
 data:
-  dataset_name: "ieee_cis"
   raw_path: "data/raw/ieee-cis"
   processed_path: "data/processed"
 
 split:
+  train_ratio: 0.6
   val_ratio: 0.2
   test_ratio: 0.2
-  time_column: "TransactionDT"
 
 target:
   name: "isFraud"

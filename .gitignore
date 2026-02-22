@@ -1,5 +1,8 @@
 # Python
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 *.py[cod]
 .ipynb_checkpoints/
 
@@ -25,3 +28,6 @@ reports/
 
 # Logs
 *.log
+
+# SRC
+src/vkr_fraud_system.egg-info/
