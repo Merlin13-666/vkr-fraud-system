@@ -6,3 +6,5 @@ joblib
 matplotlib
 tqdm
 pyarrow
+lightgbm
+scipy
