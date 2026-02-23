@@ -157,3 +157,24 @@ python -m scripts.04_train_gnn
 Папки data/processed/ и artifacts/ являются генерируемыми и обычно не коммитятся в git.
 
 Все параметры путей и настроек лежат в configs/base.yaml.
+
+## A6. Fusion (Stacking, train-only graph mode)
+В текущей версии GNN построен на train-периоде и использует внутренний time-split.
+
+Fusion обучается в режиме:
+   - tabular(train)\
+   - gnn(train / val_internal / test_internal)
+
+⚠️ Результаты fusion в этом режиме являются внутренними (internal) и используются для анализа взаимодействия скореров.
+
+Для финальной оценки обобщающей способности требуется индуктивный режим GNN (см. A7).
+
+Запуск:
+```bash
+python -m scripts.05_train_fusion
+```
+Выход:
+   - artifacts/fusion/fusion.pkl 
+   - artifacts/evaluation/fusion_metrics_internal.json 
+   - artifacts/evaluation/*_fusion_internal.parquet 
+   - artifacts/evaluation/pr_curve_fusion_internal.png
