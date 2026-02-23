@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,41 +17,56 @@ from fraud_system.evaluation.metrics import pr_auc, binary_logloss, pr_curve_poi
 from fraud_system.evaluation.plots import plot_pr_curve
 
 
-# -----------------------
+# =======================
 # Helpers
-# -----------------------
+# =======================
 
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
+def _set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def _select_tx_features(df: pd.DataFrame, max_features: int = 64) -> List[str]:
-    """Select numeric transaction features (stable and CPU-friendly)."""
+    """
+    Select numeric transaction features (stable and CPU-friendly).
+    Excludes ids/labels/time and non-numeric.
+    """
     exclude = {"transaction_id", "time", "target"}
     num_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     return sorted(num_cols)[:max_features]
 
 
 def _impute_and_scale(X: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Median impute NaNs and standardize features."""
+    """
+    Median-impute NaNs and standardize features.
+    Returns transformed X and scaler stats (median/mean/std).
+    """
     X = X.astype(np.float32, copy=True)
 
     med = np.nanmedian(X, axis=0)
     med = np.where(np.isnan(med), 0.0, med)
 
     inds = np.where(np.isnan(X))
-    X[inds] = np.take(med, inds[1])
+    if len(inds[0]) > 0:
+        X[inds] = np.take(med, inds[1])
 
     mean = X.mean(axis=0)
     std = X.std(axis=0) + 1e-6
     X = (X - mean) / std
 
-    scaler_info = {
+    scaler_stats = {
+        "median": med.astype(float).tolist(),
+        "mean": mean.astype(float).tolist(),
+        "std": std.astype(float).tolist(),
         "median_nan_to_0": True,
-        "mean": mean.tolist(),
-        "std": std.tolist(),
+        "eps": 1e-6,
     }
-    return X, scaler_info
+    return X, scaler_stats
 
 
 def _build_loaders(
@@ -107,7 +123,7 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
             batch = batch.to(device)
             logits = model(batch.x_dict, batch.edge_index_dict)
 
-            # Only the first batch_size nodes correspond to the input nodes of this loader batch
+            # Only first batch_size nodes correspond to input nodes
             bs = int(batch["transaction"].batch_size)
             logits = logits[:bs]
             yb = batch["transaction"].y[:bs].float()
@@ -127,14 +143,38 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
     return metrics, y_true, y_score
 
 
-# -----------------------
+# =======================
 # Main
-# -----------------------
+# =======================
 
 def main() -> None:
+    # ---- Config (CPU-friendly defaults) ----
+    seed = 42
     device = torch.device("cpu")
 
-    # Paths
+    max_num_features = 64
+
+    cfg = GNNConfig(
+        hidden_dim=64,
+        num_layers=2,
+        dropout=0.2,
+        lr=1e-3,
+        weight_decay=1e-4,
+    )
+    embed_dim = 64
+
+    # Neighbor sampling / batching
+    num_neighbors = None  # will be built from data.edge_types
+    batch_size_train = 2048
+    batch_size_eval = 4096
+
+    max_epochs = 15
+    patience = 5
+    early_stop_delta = 1e-5
+
+    _set_seed(seed)
+
+    # ---- Paths ----
     graph_dir = Path("artifacts/graph")
     eval_dir = Path("artifacts/evaluation")
     _ensure_dir(eval_dir)
@@ -144,20 +184,18 @@ def main() -> None:
     train_path = Path("data/processed") / "train.parquet"
 
     if not graph_path.exists():
-        raise FileNotFoundError(f"Missing graph_data.pt: {graph_path} (run scripts.03_make_graph_data)")
+        raise FileNotFoundError(f"Missing graph_data.pt: {graph_path} (run: python -m scripts.03_make_graph_data)")
     if not tx_index_path.exists():
-        raise FileNotFoundError(f"Missing tx_index.parquet: {tx_index_path} (run scripts.03_make_graph_data)")
+        raise FileNotFoundError(f"Missing tx_index.parquet: {tx_index_path} (run: python -m scripts.03_make_graph_data)")
     if not train_path.exists():
-        raise FileNotFoundError(f"Missing train.parquet: {train_path} (run scripts.00_prepare_data)")
+        raise FileNotFoundError(f"Missing train.parquet: {train_path} (run: python -m scripts.00_prepare_data)")
 
-    # Load artifacts
+    # ---- Load graph + index ----
     data = torch.load(graph_path, weights_only=False)
     tx_index = pd.read_parquet(tx_index_path)  # transaction_id -> tx_node_id
-
     df = pd.read_parquet(train_path)
 
-    # Select features
-    max_num_features = 64
+    # ---- Feature selection ----
     feat_cols = _select_tx_features(df, max_features=max_num_features)
 
     df = df[["transaction_id", "time", "target"] + feat_cols].copy()
@@ -165,10 +203,9 @@ def main() -> None:
     df["time"] = df["time"].astype("int64")
     df["target"] = df["target"].astype("int8")
 
-    # Align to tx_node_id
+    # ---- Align to graph transaction node ordering ----
     merged = tx_index.merge(df, on="transaction_id", how="left")
 
-    # Critical fields must be present
     critical = ["time", "target"]
     bad = merged[critical].isna().any(axis=1)
     bad_rows = int(bad.sum())
@@ -178,24 +215,43 @@ def main() -> None:
     nan_feat_rate = float(merged.isna().mean().mean())
     print(f"[A5] Overall NaN rate in merged table: {nan_feat_rate:.4f} (ok, will impute)")
 
-    # Prepare X, y, time
+    # ---- Build X/y/time ----
     X_raw = merged[feat_cols].to_numpy(dtype=np.float32, copy=True)
-    X, scaler_info = _impute_and_scale(X_raw)
+    X, scaler_stats = _impute_and_scale(X_raw)
 
     y = merged["target"].to_numpy(dtype=np.int64)
     times = merged["time"].to_numpy(dtype=np.int64)
 
-    # Put features/labels into HeteroData
+    # ---- Put into HeteroData ----
     data["transaction"].x = torch.tensor(X, dtype=torch.float32)
     data["transaction"].y = torch.tensor(y, dtype=torch.long)
 
-    # For entity nodes, pass node indices as x (for embedding lookup)
+    # For entity nodes, use indices as x for embedding lookup inside model
     for ntype in data.node_types:
         if ntype == "transaction":
             continue
         data[ntype].x = torch.arange(int(data[ntype].num_nodes), dtype=torch.long)
 
-    # Time-based split inside train-graph: 60/20/20
+    # -------------------------
+    # A9.0: Save tx scaler stats for external inference
+    # -------------------------
+    tx_scaler = {
+        "feat_cols": feat_cols,
+        "median": scaler_stats["median"],
+        "mean": scaler_stats["mean"],
+        "std": scaler_stats["std"],
+        "median_nan_to_0": scaler_stats.get("median_nan_to_0", True),
+        "eps": scaler_stats.get("eps", 1e-6),
+        "max_num_features": int(max_num_features),
+        "seed": int(seed),
+        "source": "A5 train graph transaction features (median impute + standardize)",
+    }
+    tx_scaler_path = graph_dir / "tx_scaler.json"
+    with open(tx_scaler_path, "w", encoding="utf-8") as f:
+        json.dump(tx_scaler, f, ensure_ascii=False, indent=2)
+    print(f"[A5] Saved tx scaler: {tx_scaler_path}")
+
+    # ---- Time-based split inside train graph (60/20/20) ----
     order = np.argsort(times)
     n = len(order)
     n_train = int(0.6 * n)
@@ -216,15 +272,13 @@ def main() -> None:
         "time_val_end": int(times[idx_val].max()),
         "feat_cols": feat_cols,
         "max_num_features": int(max_num_features),
+        "seed": int(seed),
     }
-
     with open(graph_dir / "gnn_split.json", "w", encoding="utf-8") as f:
         json.dump(split_info, f, ensure_ascii=False, indent=2)
 
-    # Sampling parameters
+    # ---- Sampling params ----
     num_neighbors = {etype: [15, 10] for etype in data.edge_types}  # 2 layers
-    batch_size_train = 2048
-    batch_size_eval = 4096
 
     train_loader, train_pred_loader, val_loader, test_loader = _build_loaders(
         data=data,
@@ -236,10 +290,7 @@ def main() -> None:
         batch_size_eval=batch_size_eval,
     )
 
-    # Model config
-    cfg = GNNConfig(hidden_dim=64, num_layers=2, dropout=0.2, lr=1e-3, weight_decay=1e-4)
-    embed_dim = 64
-
+    # ---- Model ----
     num_nodes_by_type = {nt: int(data[nt].num_nodes) for nt in data.node_types}
     model = HeteroSAGE(
         metadata=data.metadata(),
@@ -252,19 +303,16 @@ def main() -> None:
     opt = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
-    # Training loop with early stopping
-    best_val = 1e9
+    # ---- Train with early stopping on val logloss ----
+    best_val = 1e18
     best_state = None
     best_epoch = None
     stopped_epoch = None
-
-    patience = 5
-    bad = 0
-    max_epochs = 15
+    bad_epochs = 0
 
     for epoch in range(1, max_epochs + 1):
         model.train()
-        losses = []
+        losses: List[float] = []
 
         for batch in train_loader:
             batch = batch.to(device)
@@ -278,6 +326,7 @@ def main() -> None:
             loss = loss_fn(logits, yb)
             loss.backward()
             opt.step()
+
             losses.append(float(loss.item()))
 
         train_loss = float(np.mean(losses)) if losses else float("nan")
@@ -288,15 +337,14 @@ def main() -> None:
             f"val_logloss={val_metrics['logloss']:.6f} val_pr_auc={val_metrics['pr_auc']:.6f}"
         )
 
-        # early stopping by val logloss
-        if val_metrics["logloss"] < best_val - 1e-5:
+        if val_metrics["logloss"] < best_val - early_stop_delta:
             best_val = float(val_metrics["logloss"])
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch
-            bad = 0
+            bad_epochs = 0
         else:
-            bad += 1
-            if bad >= patience:
+            bad_epochs += 1
+            if bad_epochs >= patience:
                 stopped_epoch = epoch
                 print(f"[A5] Early stopping at epoch {epoch}")
                 break
@@ -304,30 +352,38 @@ def main() -> None:
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    # Final eval on train/val/test (holdout inside train-graph)
+    # ---- Final eval ----
     train_metrics, y_tr, p_tr = _eval(model, train_pred_loader, device=device)
     val_metrics, y_val, p_val = _eval(model, val_loader, device=device)
     test_metrics, y_test, p_test = _eval(model, test_loader, device=device)
 
-    print(f"[A5] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}")
-    print(f"[A5] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}")
-    print(f"[A5] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}")
+    print(
+        f"[A5] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}"
+    )
+    print(
+        f"[A5] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}"
+    )
+    print(
+        f"[A5] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}"
+    )
 
-    # Save model
+    # ---- Save model ----
     out_model = graph_dir / "gnn_model.pt"
     torch.save(model.state_dict(), out_model)
     print(f"[A5] Saved model: {out_model}")
 
-    # Save predictions aligned by transaction_id
+    # ---- Save predictions aligned by transaction_id ----
     tx_local = tx_index.set_index("tx_node_id")["transaction_id"]
 
     def _pred_df(tx_node_ids: np.ndarray, y_true: np.ndarray, y_score: np.ndarray) -> pd.DataFrame:
-        return pd.DataFrame({
-            "tx_node_id": tx_node_ids.astype("int64"),
-            "transaction_id": tx_local.loc[tx_node_ids].values.astype("int64"),
-            "p_gnn": y_score.astype("float64"),
-            "target": y_true.astype("int8"),
-        })
+        return pd.DataFrame(
+            {
+                "tx_node_id": tx_node_ids.astype("int64"),
+                "transaction_id": tx_local.loc[tx_node_ids].values.astype("int64"),
+                "p_gnn": y_score.astype("float64"),
+                "target": y_true.astype("int8"),
+            }
+        )
 
     train_pred = _pred_df(idx_train, y_tr, p_tr)
     val_pred = _pred_df(idx_val, y_val, p_val)
@@ -345,7 +401,7 @@ def main() -> None:
     print(f"[A5] Saved preds: {val_pred_path}")
     print(f"[A5] Saved preds: {test_pred_path}")
 
-    # Save metrics + config + sampler + training + split
+    # ---- Save metrics/config/split/preprocessing ----
     out = {
         "train": train_metrics,
         "val": val_metrics,
@@ -354,6 +410,7 @@ def main() -> None:
         "config": {
             **asdict(cfg),
             "embed_dim": int(embed_dim),
+            "seed": int(seed),
         },
         "sampler": {
             "num_neighbors": {str(k): v for k, v in num_neighbors.items()},
@@ -363,6 +420,7 @@ def main() -> None:
         "training": {
             "max_epochs": int(max_epochs),
             "patience": int(patience),
+            "early_stop_delta": float(early_stop_delta),
             "best_val_logloss": float(best_val),
             "best_epoch": best_epoch,
             "stopped_epoch": stopped_epoch,
@@ -370,7 +428,8 @@ def main() -> None:
         "preprocessing": {
             "impute": "median",
             "scale": "standardize",
-            "scaler_info_saved": False,
+            "tx_scaler_path": str(tx_scaler_path).replace("\\", "/"),
+            "scaler_info_saved": True,
         },
     }
 
