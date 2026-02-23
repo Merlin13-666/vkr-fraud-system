@@ -13,3 +13,12 @@ split:
 
 target:
   name: "isFraud"
+
+graph:
+  min_freq: 10
+  max_rows: null   # можно поставить число для отладки, например 200000
+  entity_cols:
+    card: ["card1"]
+    email: ["P_emaildomain", "R_emaildomain"]
+    addr: ["addr1", "addr2"]
+    device: ["DeviceInfo", "DeviceType"]
