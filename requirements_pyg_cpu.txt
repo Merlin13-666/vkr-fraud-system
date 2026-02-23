@@ -1,0 +1,6 @@
+torch-geometric==2.7.0
+--find-links https://data.pyg.org/whl/torch-2.8.0+cpu.html
+pyg_lib
+torch_sparse
+torch_scatter
+torch_cluster
