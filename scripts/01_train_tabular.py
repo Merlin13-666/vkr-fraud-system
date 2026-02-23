@@ -1,22 +1,36 @@
 from __future__ import annotations
+
 import warnings
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List
 
-import numpy as np
 import pandas as pd
 import yaml
 
-from lightgbm import early_stopping, log_evaluation
-
-from fraud_system.features.tabular import TabularSpec, get_feature_cols, detect_feature_types, build_xy, sanity_check_types, refine_numeric_columns
-from fraud_system.models.tabular_lgbm import LGBMConfig, fit_with_early_stopping, save_model, predict_proba, build_tabular_pipeline
+from fraud_system.features.tabular import (
+    TabularSpec,
+    get_feature_cols,
+    detect_feature_types,
+    build_xy,
+    sanity_check_types,
+    refine_numeric_columns,
+)
+from fraud_system.models.tabular_lgbm import (
+    LGBMConfig,
+    fit_with_early_stopping,
+    save_model,
+    predict_proba,
+)
 from fraud_system.evaluation.metrics import pr_auc, binary_logloss, pr_curve_points, roc_auc
 from fraud_system.evaluation.plots import plot_pr_curve
 
+
+# -----------------------
+# Utils
+# -----------------------
 
 def _read_yaml(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -26,11 +40,34 @@ def _read_yaml(path: str) -> dict:
 def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
+
 def _save_json(path: Path, data: Dict[str, Any]) -> None:
     _ensure_dir(path.parent)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
+def _calc_metrics(y_true, y_score) -> Dict[str, float]:
+    y_true = y_true.to_numpy() if hasattr(y_true, "to_numpy") else y_true
+    return {
+        "logloss": binary_logloss(y_true, y_score),
+        "pr_auc": pr_auc(y_true, y_score),
+        "roc_auc": roc_auc(y_true, y_score),
+    }
+
+
+def _make_pred_df(df: pd.DataFrame, spec: TabularSpec, y, p, score_col: str = "p_tabular") -> pd.DataFrame:
+    return pd.DataFrame({
+        "transaction_id": df[spec.id_col].astype("int64"),
+        "time": df[spec.time_col].astype("int64"),
+        "target": y.astype("int8"),
+        score_col: p.astype("float64"),
+    })
+
+
+# -----------------------
+# Main
+# -----------------------
 
 def main() -> None:
     cfg = _read_yaml("configs/base.yaml")
@@ -47,6 +84,7 @@ def main() -> None:
 
     spec = TabularSpec()
 
+    # -------- Feature selection / typing
     feature_cols = get_feature_cols(df_train, spec)
     num_cols, cat_cols = detect_feature_types(df_train, feature_cols)
 
@@ -54,18 +92,20 @@ def main() -> None:
     print(f"[A3] Train rows={len(df_train)}, Val rows={len(df_val)}, Test rows={len(df_test)}")
     print(f"[A3] Features={len(feature_cols)}, Num cols={len(num_cols)}, Cat cols={len(cat_cols)}")
 
+    # -------- Build X/y
     X_train, y_train = build_xy(df_train, spec, feature_cols)
     X_val, y_val = build_xy(df_val, spec, feature_cols)
     X_test, y_test = build_xy(df_test, spec, feature_cols)
 
-    # второй проход: переносим "грязные" числовые в категориальные
+    # Second pass: move "dirty numeric" to categorical
     num_cols, cat_cols = refine_numeric_columns(X_train, num_cols, cat_cols)
-
     print(f"[A3] Refined: Num cols={len(num_cols)}, Cat cols={len(cat_cols)}")
 
     sanity_check_types(X_train, num_cols, cat_cols)
 
+    # -------- Train model (logloss + early stopping)
     model_cfg = LGBMConfig(seed=seed)
+
     model_params = {
         "n_estimators": model_cfg.n_estimators,
         "learning_rate": model_cfg.learning_rate,
@@ -93,26 +133,61 @@ def main() -> None:
     )
 
     best_iter = getattr(model.named_steps["model"], "best_iteration_", None)
+    best_iter = int(best_iter) if best_iter is not None else None
     print(f"[A3] best_iteration={best_iter}")
 
-    best_iter = int(best_iter) if best_iter is not None else None
-
+    # -------- Predict: TRAIN/VAL/TEST
+    p_train = predict_proba(model, X_train)
     p_val = predict_proba(model, X_val)
     p_test = predict_proba(model, X_test)
 
+    train_metrics = _calc_metrics(y_train, p_train)
+    val_metrics = _calc_metrics(y_val, p_val)
+    test_metrics = _calc_metrics(y_test, p_test)
+
+    print(f"[A3] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}")
+    print(f"[A3] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}")
+    print(f"[A3] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}")
+
+    # -------- Save artifacts
+    model_path = Path("artifacts/tabular/model.pkl")
+    _ensure_dir(model_path.parent)
+    save_model(model, str(model_path))
+    print(f"[A3] Saved model: {model_path}")
+
+    eval_dir = Path("artifacts/evaluation")
+    _ensure_dir(eval_dir)
+
+    # Save predictions (now includes TRAIN for fusion)
+    train_pred = _make_pred_df(df_train, spec, y_train, p_train, score_col="p_tabular")
+    val_pred = _make_pred_df(df_val, spec, y_val, p_val, score_col="p_tabular")
+    test_pred = _make_pred_df(df_test, spec, y_test, p_test, score_col="p_tabular")
+
+    train_pred_path = eval_dir / "train_pred_tabular.parquet"
+    val_pred_path = eval_dir / "val_pred_tabular.parquet"
+    test_pred_path = eval_dir / "test_pred_tabular.parquet"
+
+    train_pred.to_parquet(train_pred_path, index=False)
+    val_pred.to_parquet(val_pred_path, index=False)
+    test_pred.to_parquet(test_pred_path, index=False)
+
+    print(f"[A3] Saved preds: {train_pred_path}")
+    print(f"[A3] Saved preds: {val_pred_path}")
+    print(f"[A3] Saved preds: {test_pred_path}")
+
+    # Save PR curve (VAL)
+    precision, recall, _ = pr_curve_points(y_val.to_numpy(), p_val)
+    pr_path = eval_dir / "pr_curve_tabular.png"
+    plot_pr_curve(precision, recall, str(pr_path), "PR Curve (Tabular, VAL)")
+    print(f"[A3] Saved PR curve: {pr_path}")
+
+    # Save metrics (now includes train)
     metrics = {
         "best_iteration": best_iter,
-        "model_params": model_params,
-        "val": {
-            "logloss": binary_logloss(y_val.to_numpy(), p_val),
-            "pr_auc": pr_auc(y_val.to_numpy(), p_val),
-            "roc_auc": roc_auc(y_val.to_numpy(), p_val),
-        },
-        "test": {
-            "logloss": binary_logloss(y_test.to_numpy(), p_test),
-            "pr_auc": pr_auc(y_test.to_numpy(), p_test),
-            "roc_auc": roc_auc(y_test.to_numpy(), p_test),
-        },
+        "model_params": {**model_params, "best_iteration": best_iter},
+        "train": train_metrics,
+        "val": val_metrics,
+        "test": test_metrics,
         "meta": {
             "n_train": int(len(df_train)),
             "n_val": int(len(df_val)),
@@ -124,55 +199,15 @@ def main() -> None:
         },
     }
 
-    print(f"[A3] VAL:  logloss={metrics['val']['logloss']:.6f}, pr_auc={metrics['val']['pr_auc']:.6f}, roc_auc={metrics['val']['roc_auc']:.6f}")
-    print(f"[A3] TEST: logloss={metrics['test']['logloss']:.6f}, pr_auc={metrics['test']['pr_auc']:.6f}, roc_auc={metrics['test']['roc_auc']:.6f}")
+    metrics_path = eval_dir / "tabular_metrics.json"
+    _save_json(metrics_path, metrics)
+    print(f"[A3] Saved metrics: {metrics_path}")
 
-    metrics["model_params"]["best_iteration"] = best_iter
-    # --- Save artifacts ---
-    model_path = Path("artifacts/tabular/model.pkl")
-    _ensure_dir(model_path.parent)
-    save_model(model, str(model_path))
+    # Save used columns (reproducibility)
+    spec_path = eval_dir / "tabular_feature_spec.json"
+    _save_json(spec_path, {"feature_cols": feature_cols, "num_cols": num_cols, "cat_cols": cat_cols})
+    print(f"[A3] Saved feature spec: {spec_path}")
 
-    eval_dir = Path("artifacts/evaluation")
-    _ensure_dir(eval_dir)
-
-    val_pred = pd.DataFrame({
-        "transaction_id": df_val[spec.id_col].astype("int64"),
-        "time": df_val[spec.time_col].astype("int64"),
-        "target": y_val.astype("int8"),
-        "p_tabular": p_val.astype("float64"),
-    })
-    test_pred = pd.DataFrame({
-        "transaction_id": df_test[spec.id_col].astype("int64"),
-        "time": df_test[spec.time_col].astype("int64"),
-        "target": y_test.astype("int8"),
-        "p_tabular": p_test.astype("float64"),
-    })
-
-    val_pred.to_parquet(eval_dir / "val_pred_tabular.parquet", index=False)
-    test_pred.to_parquet(eval_dir / "test_pred_tabular.parquet", index=False)
-
-    print(f"[A3] Saved preds: {eval_dir / 'val_pred_tabular.parquet'}")
-    print(f"[A3] Saved preds: {eval_dir / 'test_pred_tabular.parquet'}")
-
-    precision, recall, _ = pr_curve_points(y_val.to_numpy(), p_val)
-    plot_pr_curve(precision, recall, str(eval_dir / "pr_curve_tabular.png"), "PR Curve (Tabular, VAL)")
-
-    with open(eval_dir / "tabular_metrics.json", "w", encoding="utf-8") as f:
-        json.dump(metrics, f, ensure_ascii=False, indent=2)
-
-    # фиксируем используемые колонки (для воспроизводимости)
-    with open(eval_dir / "tabular_feature_spec.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {"feature_cols": feature_cols, "num_cols": num_cols, "cat_cols": cat_cols},
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    print(f"[A3] Saved model: {model_path}")
-    print(f"[A3] Saved metrics: {eval_dir / 'tabular_metrics.json'}")
-    print(f"[A3] Saved PR curve: {eval_dir / 'pr_curve_tabular.png'}")
     print("[A3] Done.")
 
 
