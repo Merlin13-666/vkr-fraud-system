@@ -22,8 +22,9 @@ def main() -> None:
     node_map = pd.read_parquet(node_map_path)
     edges = pd.read_parquet(edges_path)
 
-    # transactions present in edges (train set)
-    tx_ids = edges["src_id"].astype("int64")
+    # список transaction_id берём из train.parquet
+    df_train = pd.read_parquet(Path("data/processed") / "train.parquet")
+    tx_ids = df_train["transaction_id"].astype("int64")
 
     artifacts = build_heterodata(node_map=node_map, edges=edges, transactions=tx_ids)
 

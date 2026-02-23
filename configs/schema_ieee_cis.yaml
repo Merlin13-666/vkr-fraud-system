@@ -9,3 +9,5 @@ entities:
   email_r: "R_emaildomain"
   addr1: "addr1"
   addr2: "addr2"
+  device: "DeviceInfo"
+  device_type: "DeviceType"

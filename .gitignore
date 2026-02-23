@@ -8,12 +8,18 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.venv*/
 venv/
 env/
 
 # IDE
 .idea/
 .vscode/
+
+# build artifacts
+*.egg-info/
+dist/
+build/
 
 # OS
 .DS_Store
@@ -22,7 +28,6 @@ Thumbs.db
 # Data & generated artifacts (не коммитим)
 data/raw/
 data/processed/
-data/splits/
 artifacts/
 reports/
 
