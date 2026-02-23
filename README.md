@@ -219,3 +219,22 @@ python -m scripts.06_evaluate
 - `artifacts/evaluation/zone_share_tabular_val.png`
 - `artifacts/evaluation/zone_share_tabular_test.png`
 - `artifacts/evaluation/cost_tabular_test.json`
+
+## A8. Batch Predict (Tabular + Policy)
+
+Модуль пакетного инференса принимает на вход транзакции в формате CSV или Parquet,
+применяет табличную модель и политику порогов (allow/review/deny).
+
+Запуск:
+
+```bash
+python -m scripts.07_predict_tabular \
+  --input data/processed/test.parquet \
+  --model artifacts/tabular/model.pkl \
+  --thresholds artifacts/thresholds/thresholds_tabular.json \
+  --feature-spec artifacts/evaluation/tabular_feature_spec.json \
+  --out artifacts/predict/test_tabular.parquet
+```
+Выход:
+- predictions.parquet — transaction_id, p_tabular, decision 
+- summary.json — статистика распределения решений
