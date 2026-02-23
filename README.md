@@ -238,3 +238,22 @@ python -m scripts.07_predict_tabular \
 Выход:
 - predictions.parquet — transaction_id, p_tabular, decision 
 - summary.json — статистика распределения решений
+
+## A9. Inductive GNN predict (external)
+
+На этапе A9 GNN применяется в индуктивном режиме к внешним выборкам VAL/TEST:
+для новых транзакций строятся связи к сущностям графа через `node_map`.
+Неизвестные сущности мапятся в UNK-node (по одному на тип).
+
+Запуск:
+```bash
+python -m scripts.08_predict_gnn_external --split val
+python -m scripts.08_predict_gnn_external --split test
+```
+Выход:
+- artifacts/evaluation/val_pred_gnn_external.parquet 
+- artifacts/evaluation/test_pred_gnn_external.parquet 
+- artifacts/evaluation/gnn_external_metrics_val.json 
+- artifacts/evaluation/gnn_external_metrics_test.json 
+- artifacts/evaluation/gnn_external_mapping_val.json (статистика unknown)
+- artifacts/evaluation/gnn_external_mapping_test.json
