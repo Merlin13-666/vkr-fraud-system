@@ -178,3 +178,44 @@ python -m scripts.05_train_fusion
    - artifacts/evaluation/fusion_metrics_internal.json 
    - artifacts/evaluation/*_fusion_internal.parquet 
    - artifacts/evaluation/pr_curve_fusion_internal.png
+
+## A7. Evaluate + thresholds + decisions (allow/review/deny)
+
+На этапе A7 подбираются пороги решений для системы на основе вероятности мошенничества.
+
+Политика решений:
+- `p >= T_deny`  → **DENY**
+- `T_review <= p < T_deny` → **REVIEW**
+- `p < T_review` → **ALLOW**
+
+Пороги подбираются на **валидационной выборке** (VAL) и фиксируются,
+после чего оцениваются на **тестовой выборке** (TEST).
+
+По умолчанию используются ограничения:
+- максимальный FPR для зоны DENY: `max_fpr_deny = 0.01`
+- максимальная доля операций в зоне REVIEW: `max_review_share = 0.10`
+
+Запуск:
+
+```bash
+python -m scripts.06_evaluate
+```
+Выходные файлы:
+- `artifacts/thresholds/thresholds_tabular.json` — выбранные пороги `T_review`, `T_deny`
+- `artifacts/evaluation/decision_zones_tabular_val.csv` — таблица зон на VAL
+- `artifacts/evaluation/decision_zones_tabular_test.csv` — таблица зон на TEST
+- `artifacts/evaluation/decision_binary_tabular_val.csv` — метрики deny-порога на VAL (Precision/Recall/FPR)
+- `artifacts/evaluation/decision_binary_tabular_test.csv` — метрики deny-порога на TEST
+- `artifacts/evaluation/evaluate_summary.json` — сводка метрик + политика порогов
+
+Пороги подбираются на VAL и применяются на TEST без переобучения.
+
+### A7.2 (дополнительно)
+Скрипт также строит:
+- графики долей операций по зонам (VAL/TEST)
+- простую модель экономических потерь (cost) на TEST
+
+Выход:
+- `artifacts/evaluation/zone_share_tabular_val.png`
+- `artifacts/evaluation/zone_share_tabular_test.png`
+- `artifacts/evaluation/cost_tabular_test.json`
