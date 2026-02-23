@@ -28,6 +28,10 @@ Thumbs.db
 # Data & generated artifacts (не коммитим)
 data/raw/
 data/processed/
+data/splits/
+data/**/*.parquet
+data/**/*.csv
+data/**/*.zip
 artifacts/
 reports/
 
