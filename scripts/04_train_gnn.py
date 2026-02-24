@@ -78,7 +78,6 @@ def _build_loaders(
     batch_size_train: int,
     batch_size_eval: int,
 ):
-    """Create NeighborLoaders for train, train_pred, val, test."""
     train_loader = NeighborLoader(
         data,
         num_neighbors=num_neighbors,
@@ -115,15 +114,17 @@ def _build_loaders(
 
 
 def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
-    """Evaluate model on loader, return metrics + arrays."""
+    """
+    Evaluate model on loader, return:
+      metrics, y_true, prob, logits
+    """
     model.eval()
-    ys, ps = [], []
+    ys, ps, ls = [], [], []
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(device)
             logits = model(batch.x_dict, batch.edge_index_dict)
 
-            # Only first batch_size nodes correspond to input nodes
             bs = int(batch["transaction"].batch_size)
             logits = logits[:bs]
             yb = batch["transaction"].y[:bs].float()
@@ -131,16 +132,21 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
             prob = torch.sigmoid(logits).cpu().numpy()
             ys.append(yb.cpu().numpy())
             ps.append(prob)
+            ls.append(logits.cpu().numpy())
 
     y_true = np.concatenate(ys)
     y_score = np.concatenate(ps)
+    y_logit = np.concatenate(ls)
+
+    # stable clipping for logloss
+    y_score = np.clip(y_score, 1e-6, 1 - 1e-6)
 
     metrics = {
-        "logloss": binary_logloss(y_true, y_score),
-        "pr_auc": pr_auc(y_true, y_score),
-        "roc_auc": roc_auc(y_true, y_score),
+        "logloss": float(binary_logloss(y_true, y_score)),
+        "pr_auc": float(pr_auc(y_true, y_score)),
+        "roc_auc": float(roc_auc(y_true, y_score)),
     }
-    return metrics, y_true, y_score
+    return metrics, y_true, y_score, y_logit
 
 
 # =======================
@@ -148,7 +154,6 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
 # =======================
 
 def main() -> None:
-    # ---- Config (CPU-friendly defaults) ----
     seed = 42
     device = torch.device("cpu")
 
@@ -163,8 +168,7 @@ def main() -> None:
     )
     embed_dim = 64
 
-    # Neighbor sampling / batching
-    num_neighbors = None  # will be built from data.edge_types
+    num_neighbors = None
     batch_size_train = 2048
     batch_size_eval = 4096
 
@@ -174,7 +178,6 @@ def main() -> None:
 
     _set_seed(seed)
 
-    # ---- Paths ----
     graph_dir = Path("artifacts/graph")
     eval_dir = Path("artifacts/evaluation")
     _ensure_dir(eval_dir)
@@ -190,12 +193,10 @@ def main() -> None:
     if not train_path.exists():
         raise FileNotFoundError(f"Missing train.parquet: {train_path} (run: python -m scripts.00_prepare_data)")
 
-    # ---- Load graph + index ----
     data = torch.load(graph_path, weights_only=False)
-    tx_index = pd.read_parquet(tx_index_path)  # transaction_id -> tx_node_id
+    tx_index = pd.read_parquet(tx_index_path)
     df = pd.read_parquet(train_path)
 
-    # ---- Feature selection ----
     feat_cols = _select_tx_features(df, max_features=max_num_features)
 
     df = df[["transaction_id", "time", "target"] + feat_cols].copy()
@@ -203,7 +204,6 @@ def main() -> None:
     df["time"] = df["time"].astype("int64")
     df["target"] = df["target"].astype("int8")
 
-    # ---- Align to graph transaction node ordering ----
     merged = tx_index.merge(df, on="transaction_id", how="left")
 
     critical = ["time", "target"]
@@ -215,26 +215,21 @@ def main() -> None:
     nan_feat_rate = float(merged.isna().mean().mean())
     print(f"[A5] Overall NaN rate in merged table: {nan_feat_rate:.4f} (ok, will impute)")
 
-    # ---- Build X/y/time ----
     X_raw = merged[feat_cols].to_numpy(dtype=np.float32, copy=True)
     X, scaler_stats = _impute_and_scale(X_raw)
 
     y = merged["target"].to_numpy(dtype=np.int64)
     times = merged["time"].to_numpy(dtype=np.int64)
 
-    # ---- Put into HeteroData ----
     data["transaction"].x = torch.tensor(X, dtype=torch.float32)
     data["transaction"].y = torch.tensor(y, dtype=torch.long)
 
-    # For entity nodes, use indices as x for embedding lookup inside model
     for ntype in data.node_types:
         if ntype == "transaction":
             continue
         data[ntype].x = torch.arange(int(data[ntype].num_nodes), dtype=torch.long)
 
-    # -------------------------
-    # A9.0: Save tx scaler stats for external inference
-    # -------------------------
+    # Save scaler for inductive inference
     tx_scaler = {
         "feat_cols": feat_cols,
         "median": scaler_stats["median"],
@@ -251,7 +246,7 @@ def main() -> None:
         json.dump(tx_scaler, f, ensure_ascii=False, indent=2)
     print(f"[A5] Saved tx scaler: {tx_scaler_path}")
 
-    # ---- Time-based split inside train graph (60/20/20) ----
+    # time-based split inside train graph (60/20/20)
     order = np.argsort(times)
     n = len(order)
     n_train = int(0.6 * n)
@@ -277,8 +272,8 @@ def main() -> None:
     with open(graph_dir / "gnn_split.json", "w", encoding="utf-8") as f:
         json.dump(split_info, f, ensure_ascii=False, indent=2)
 
-    # ---- Sampling params ----
-    num_neighbors = {etype: [15, 10] for etype in data.edge_types}  # 2 layers
+    # sampling params
+    num_neighbors = {etype: [15, 10] for etype in data.edge_types}
 
     train_loader, train_pred_loader, val_loader, test_loader = _build_loaders(
         data=data,
@@ -290,7 +285,6 @@ def main() -> None:
         batch_size_eval=batch_size_eval,
     )
 
-    # ---- Model ----
     num_nodes_by_type = {nt: int(data[nt].num_nodes) for nt in data.node_types}
     model = HeteroSAGE(
         metadata=data.metadata(),
@@ -301,9 +295,17 @@ def main() -> None:
     ).to(device)
 
     opt = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    loss_fn = torch.nn.BCEWithLogitsLoss()
 
-    # ---- Train with early stopping on val logloss ----
+    # ===== A5.1: pos_weight for imbalanced labels =====
+    y_train = y[idx_train]
+    pos = float(y_train.sum())
+    neg = float(len(y_train) - y_train.sum())
+    pos_weight_value = float(neg / max(pos, 1.0))
+    pos_weight = torch.tensor([pos_weight_value], dtype=torch.float32, device=device)
+    loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    print(f"[A5] pos_weight={pos_weight_value:.6f} (pos={int(pos)}, neg={int(neg)})")
+
     best_val = 1e18
     best_state = None
     best_epoch = None
@@ -330,7 +332,7 @@ def main() -> None:
             losses.append(float(loss.item()))
 
         train_loss = float(np.mean(losses)) if losses else float("nan")
-        val_metrics, _, _ = _eval(model, val_loader, device=device)
+        val_metrics, _, _, _ = _eval(model, val_loader, device=device)
 
         print(
             f"[A5][{epoch}] train_loss={train_loss:.6f} "
@@ -352,42 +354,34 @@ def main() -> None:
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    # ---- Final eval ----
-    train_metrics, y_tr, p_tr = _eval(model, train_pred_loader, device=device)
-    val_metrics, y_val, p_val = _eval(model, val_loader, device=device)
-    test_metrics, y_test, p_test = _eval(model, test_loader, device=device)
+    train_metrics, y_tr, p_tr, l_tr = _eval(model, train_pred_loader, device=device)
+    val_metrics, y_val, p_val, l_val = _eval(model, val_loader, device=device)
+    test_metrics, y_te, p_te, l_te = _eval(model, test_loader, device=device)
 
-    print(
-        f"[A5] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}"
-    )
-    print(
-        f"[A5] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}"
-    )
-    print(
-        f"[A5] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}"
-    )
+    print(f"[A5] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}")
+    print(f"[A5] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}")
+    print(f"[A5] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}")
 
-    # ---- Save model ----
     out_model = graph_dir / "gnn_model.pt"
     torch.save(model.state_dict(), out_model)
     print(f"[A5] Saved model: {out_model}")
 
-    # ---- Save predictions aligned by transaction_id ----
     tx_local = tx_index.set_index("tx_node_id")["transaction_id"]
 
-    def _pred_df(tx_node_ids: np.ndarray, y_true: np.ndarray, y_score: np.ndarray) -> pd.DataFrame:
+    def _pred_df(tx_node_ids: np.ndarray, y_true: np.ndarray, y_score: np.ndarray, y_logit: np.ndarray) -> pd.DataFrame:
         return pd.DataFrame(
             {
                 "tx_node_id": tx_node_ids.astype("int64"),
                 "transaction_id": tx_local.loc[tx_node_ids].values.astype("int64"),
                 "p_gnn": y_score.astype("float64"),
+                "logit_gnn": y_logit.astype("float64"),
                 "target": y_true.astype("int8"),
             }
         )
 
-    train_pred = _pred_df(idx_train, y_tr, p_tr)
-    val_pred = _pred_df(idx_val, y_val, p_val)
-    test_pred = _pred_df(idx_test, y_test, p_test)
+    train_pred = _pred_df(idx_train, y_tr, p_tr, l_tr)
+    val_pred = _pred_df(idx_val, y_val, p_val, l_val)
+    test_pred = _pred_df(idx_test, y_te, p_te, l_te)
 
     train_pred_path = eval_dir / "train_pred_gnn.parquet"
     val_pred_path = eval_dir / "val_pred_gnn.parquet"
@@ -401,7 +395,6 @@ def main() -> None:
     print(f"[A5] Saved preds: {val_pred_path}")
     print(f"[A5] Saved preds: {test_pred_path}")
 
-    # ---- Save metrics/config/split/preprocessing ----
     out = {
         "train": train_metrics,
         "val": val_metrics,
@@ -430,6 +423,11 @@ def main() -> None:
             "scale": "standardize",
             "tx_scaler_path": str(tx_scaler_path).replace("\\", "/"),
             "scaler_info_saved": True,
+        },
+        "class_balance": {
+            "pos": int(pos),
+            "neg": int(neg),
+            "pos_weight": float(pos_weight_value),
         },
     }
 
