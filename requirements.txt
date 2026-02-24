@@ -3,8 +3,9 @@ pandas
 scikit-learn
 pyyaml
 joblib
-matplotlib
+matplotlib>=3.7
 tqdm
 pyarrow
 lightgbm
 scipy
+shap>=0.45.0
