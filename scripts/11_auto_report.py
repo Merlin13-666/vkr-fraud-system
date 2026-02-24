@@ -50,6 +50,13 @@ def _norm(p: Path) -> str:
     return str(p).replace("\\", "/")
 
 
+def _link(path: Path, label: Optional[str] = None) -> str:
+    """HTML link to a local file (works when opening report from the repo folder)."""
+    rel = _norm(path)
+    txt = label or rel
+    return f'<a href="{rel}">{txt}</a>'
+
+
 # =========================
 # Model specs
 # =========================
@@ -100,7 +107,7 @@ def _extract_metrics_fusion_internal(eval_dir: Path) -> Optional[ModelBlock]:
     if not j:
         return None
 
-    # internal fusion json often uses: train / val_internal / test_internal
+    # internal fusion JSON uses keys: train / val_internal / test_internal
     val = j.get("val_internal", j.get("val", {}))
     test = j.get("test_internal", j.get("test", {}))
 
@@ -168,21 +175,20 @@ def _build_comparison_table(blocks: List[ModelBlock]) -> pd.DataFrame:
         )
     df = pd.DataFrame(rows)
 
-    # enforce float where possible
     for c in ["val_logloss", "val_pr_auc", "val_roc_auc", "test_logloss", "test_pr_auc", "test_roc_auc"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # cosmetic: put main “system mode” first
-    priority = {
-        "fusion_external": 0,
-        "tabular": 1,
-        "gnn_external": 2,
-        "gnn_internal": 3,
-        "fusion_internal": 4,
-    }
-    df["__prio"] = df["model_key"].map(lambda x: priority.get(x, 999))
-    df = df.sort_values(["__prio", "model_key"]).drop(columns=["__prio"]).reset_index(drop=True)
+    # Cosmetic #1:
+    # Put fusion_external first (main system mode), then sort by test_pr_auc desc, test_logloss asc.
+    is_main = (df["model_key"] == "fusion_external").astype(int)
+    df["_is_main"] = is_main
+    df = df.sort_values(
+        by=["_is_main", "test_pr_auc", "test_logloss"],
+        ascending=[False, False, True],
+        na_position="last",
+    ).drop(columns=["_is_main"]).reset_index(drop=True)
+
     return df
 
 
@@ -193,6 +199,7 @@ def _build_comparison_table(blocks: List[ModelBlock]) -> pd.DataFrame:
 def main() -> None:
     eval_dir = Path("artifacts/evaluation")
     thr_dir = Path("artifacts/thresholds")
+
     reports_dir = Path("reports")
     assets_dir = reports_dir / "assets"
     tables_dir = reports_dir / "tables"
@@ -206,11 +213,11 @@ def main() -> None:
     # ---------
     blocks: List[ModelBlock] = []
     for fn in [
+        _extract_metrics_fusion_external,  # try main mode first
         _extract_metrics_tabular,
         _extract_metrics_gnn_internal,
         _extract_metrics_fusion_internal,
         _extract_metrics_gnn_external,
-        _extract_metrics_fusion_external,
     ]:
         b = fn(eval_dir)
         if b is not None:
@@ -232,6 +239,7 @@ def main() -> None:
         ("pr_curve_fusion_internal.png", "pr_curve_fusion_internal.png"),
         ("pr_curve_gnn_external_val.png", "pr_curve_gnn_external_val.png"),
         ("pr_curve_fusion_external.png", "pr_curve_fusion_external.png"),
+
         ("zone_share_tabular_val.png", "zone_share_tabular_val.png"),
         ("zone_share_tabular_test.png", "zone_share_tabular_test.png"),
         ("zone_share_fusion_external_val.png", "zone_share_fusion_external_val.png"),
@@ -246,7 +254,7 @@ def main() -> None:
             copied_figs.append(dst_name)
 
     # ---------
-    # Load thresholds + decision tables + costs
+    # Load thresholds + decision tables + costs (tabular + fusion_external)
     # ---------
     thresholds_tab = _read_json(thr_dir / "thresholds_tabular.json")
     thresholds_fus = _read_json(thr_dir / "thresholds_fusion_external.json")
@@ -270,7 +278,7 @@ def main() -> None:
     dz_fus_test_df = _read_csv_if_exists(dz_fus_test)
 
     # ---------
-    # Human titles for figures
+    # Titles
     # ---------
     FIG_TITLES = {
         "pr_curve_tabular.png": "PR-кривая: Tabular (LightGBM)",
@@ -278,6 +286,7 @@ def main() -> None:
         "pr_curve_fusion_internal.png": "PR-кривая: Fusion (internal, ablation)",
         "pr_curve_gnn_external_val.png": "PR-кривая: GNN (external, inductive) — VAL",
         "pr_curve_fusion_external.png": "PR-кривая: Fusion (external, честный режим) — VAL",
+
         "zone_share_tabular_val.png": "Доли зон: Tabular — VAL",
         "zone_share_tabular_test.png": "Доли зон: Tabular — TEST",
         "zone_share_fusion_external_val.png": "Доли зон: Fusion external — VAL",
@@ -308,56 +317,65 @@ def main() -> None:
         return f'<img src="assets/{tag}" alt="{tag}"/>'
 
     # ---------
-    # Build "Main result" card from fusion_external
+    # Main system summary (fusion_external)
     # ---------
-    fusion_external_json = _read_json(eval_dir / "fusion_metrics_external.json") or {}
-    fusion_test = (fusion_external_json.get("test_external") or {})
-    fusion_meta_trained_on = fusion_external_json.get("trained_on", "external_val")
-    fusion_meta_used_gnn = fusion_external_json.get("used_gnn", "calibrated")
-
-    t_review = (thresholds_fus or {}).get("t_review")
-    t_deny = (thresholds_fus or {}).get("t_deny")
-    max_fpr_deny = (thresholds_fus or {}).get("max_fpr_deny")
-    max_review_share = (thresholds_fus or {}).get("max_review_share")
-
-    main_card_html = f"""
-    <div class="card">
-      <h2>Главный результат системы (для РПЗ)</h2>
-      <div class="muted small">
-        Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
-        trained_on: <code>{fusion_meta_trained_on}</code>,
-        used_gnn: <code>{fusion_meta_used_gnn}</code>
-      </div>
-      <div class="grid">
-        <div>
-          <b>TEST</b><br/>
-          logloss: <code>{_fmt(fusion_test.get("logloss"))}</code><br/>
-          PR-AUC: <code>{_fmt(fusion_test.get("pr_auc"))}</code><br/>
-          ROC-AUC: <code>{_fmt(fusion_test.get("roc_auc"))}</code>
+    fusion_ext = next((b for b in blocks if b.key == "fusion_external"), None)
+    main_summary_html = ""
+    if fusion_ext is not None:
+        t_fus = thresholds_fus or {}
+        main_summary_html = f"""
+        <div class="card">
+          <h2>Главный результат системы (для РПЗ)</h2>
+          <div class="muted small">
+            Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
+            trained_on: <code>{fusion_ext.extra.get("trained_on", "external_val")}</code>,
+            used_gnn: <code>{fusion_ext.extra.get("used_gnn", "calibrated")}</code><br/>
+            metrics source: {_link(eval_dir / "fusion_metrics_external.json", "fusion_metrics_external.json")}
+          </div>
+          <div class="grid">
+            <div>
+              <b>TEST</b><br/>
+              logloss: <code class="ok">{_fmt(fusion_ext.test_metrics.get("logloss"))}</code><br/>
+              PR-AUC: <code class="ok">{_fmt(fusion_ext.test_metrics.get("pr_auc"))}</code><br/>
+              ROC-AUC: <code class="ok">{_fmt(fusion_ext.test_metrics.get("roc_auc"))}</code>
+            </div>
+            <div>
+              <b>Thresholds</b><br/>
+              t_review: <code>{_fmt(t_fus.get("t_review"))}</code><br/>
+              t_deny: <code>{_fmt(t_fus.get("t_deny"))}</code><br/>
+              <span class="muted small">
+                constraints: max_fpr_deny={t_fus.get("max_fpr_deny")} | max_review_share={t_fus.get("max_review_share")}
+              </span>
+              <div class="muted small">source: {_link(thr_dir / "thresholds_fusion_external.json", "thresholds_fusion_external.json")}</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <b>Thresholds</b><br/>
-          t_review: <code>{_fmt(t_review)}</code><br/>
-          t_deny: <code>{_fmt(t_deny)}</code><br/>
-          <span class="muted small">
-            constraints: max_fpr_deny={max_fpr_deny}
-            | max_review_share={max_review_share}
-          </span>
-        </div>
-      </div>
-    </div>
-    """
+        """
 
     # ---------
-    # Per-model blocks
+    # Model blocks
     # ---------
-    blocks_html_parts: List[str] = []
+    blocks_html = []
     for b in blocks:
-        blocks_html_parts.append(
+        extra_bits = []
+        if b.key == "fusion_external":
+            extra_bits.append(f"trained_on={b.extra.get('trained_on')}")
+            extra_bits.append(f"used_gnn={b.extra.get('used_gnn')}")
+        if b.key == "gnn_internal" and b.extra.get("pos_weight") is not None:
+            extra_bits.append(f"pos_weight={_fmt(b.extra.get('pos_weight'), nd=3)}")
+
+        extra_line = ""
+        if extra_bits:
+            extra_line = " | ".join(extra_bits)
+
+        blocks_html.append(
             f"""
             <div class="card">
               <h3>{b.title}</h3>
-              <div class="muted small">key: <code>{b.key}</code></div>
+              <div class="muted small">
+                key: <code>{b.key}</code>
+                {"&nbsp;|&nbsp;" + extra_line if extra_line else ""}
+              </div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
@@ -375,11 +393,12 @@ def main() -> None:
             </div>
             """
         )
-    blocks_html = "\n".join(blocks_html_parts)
+    blocks_html = "\n".join(blocks_html)
 
     # ---------
-    # Figures
+    # Figures sections
     # ---------
+    pr_figs = []
     pr_order = [
         "pr_curve_tabular.png",
         "pr_curve_gnn_internal.png",
@@ -387,55 +406,58 @@ def main() -> None:
         "pr_curve_gnn_external_val.png",
         "pr_curve_fusion_external.png",
     ]
-    pr_figs_parts: List[str] = []
     for f in pr_order:
         if f in copied_figs:
             title = FIG_TITLES.get(f, f)
-            pr_figs_parts.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
-    pr_figs_html = "\n".join(pr_figs_parts)
+            pr_figs.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
+    pr_figs_html = "\n".join(pr_figs)
 
+    zone_figs = []
     zone_order = [
         "zone_share_tabular_val.png",
         "zone_share_tabular_test.png",
         "zone_share_fusion_external_val.png",
         "zone_share_fusion_external_test.png",
     ]
-    zone_figs_parts: List[str] = []
     for f in zone_order:
         if f in copied_figs:
             title = FIG_TITLES.get(f, f)
-            zone_figs_parts.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
-    zone_figs_html = "\n".join(zone_figs_parts)
+            zone_figs.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
+    zone_figs_html = "\n".join(zone_figs)
 
     # ---------
-    # Thresholds
+    # Threshold blocks
     # ---------
-    def _thr_block(name: str, thr: Optional[Dict[str, Any]]) -> str:
+    def _thr_block(name: str, thr: Optional[Dict[str, Any]], src_path: Path) -> str:
         if not thr:
-            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found</div></div>"
+            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm(src_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{name}</h3>
           <div>t_review: <code>{_fmt(thr.get("t_review"))}</code></div>
           <div>t_deny: <code>{_fmt(thr.get("t_deny"))}</code></div>
           <div class='muted small'>constraints: max_fpr_deny={thr.get("max_fpr_deny")} | max_review_share={thr.get("max_review_share")}</div>
+          <div class='muted small'>source: {_link(src_path, src_path.name)}</div>
         </div>
         """
 
-    thr_html = "<div class='grid'>" + _thr_block("TABULAR thresholds", thresholds_tab) + _thr_block(
-        "FUSION_EXTERNAL thresholds", thresholds_fus
-    ) + "</div>"
+    thr_html = (
+        "<div class='grid'>"
+        + _thr_block("TABULAR thresholds", thresholds_tab, thr_dir / "thresholds_tabular.json")
+        + _thr_block("FUSION_EXTERNAL thresholds", thresholds_fus, thr_dir / "thresholds_fusion_external.json")
+        + "</div>"
+    )
 
     # ---------
-    # Decision zones tables (preview)
+    # Decision zones
     # ---------
     def _dz_block(title: str, df: Optional[pd.DataFrame], file_path: Path) -> str:
         if df is None:
-            return f"<div class='card'><h3>{title}</h3><div class='muted'>Not found: <code>{_norm(file_path)}</code></div></div>"
+            return f"<div class='card'><h3>{title}</h3><div class='muted'>Not found: {_norm(file_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{title}</h3>
-          <div class='muted small'>source: <code>{_norm(file_path)}</code></div>
+          <div class='muted small'>source: {_link(file_path, file_path.name)}</div>
           {_df_to_html(df, max_rows=10)}
         </div>
         """
@@ -450,69 +472,58 @@ def main() -> None:
     """
 
     # ---------
-    # Cost blocks (safe + more explicit)
+    # Costs
     # ---------
     def _cost_block(name: str, c: Optional[Dict[str, Any]], src_path: Path) -> str:
         if not c:
-            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: <code>{_norm(src_path)}</code></div></div>"
-
-        # Handle different possible schemas (yours may be minimal)
-        avg_cost = c.get("avg_cost_per_tx", c.get("avg_cost"))
-        total_cost = c.get("total_cost")
-        n = c.get("n")
-        costs = c.get("costs")
-
-        extras_lines: List[str] = []
-        if n is not None:
-            extras_lines.append(f"<div>n: <code>{n}</code></div>")
-        if costs is not None:
-            extras_lines.append(f"<div class='muted small'>costs: {costs}</div>")
-        extras_html = "\n".join(extras_lines)
-
+            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm(src_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{name}</h3>
-          <div class='muted small'>source: <code>{_norm(src_path)}</code></div>
-          <div>avg_cost_per_tx: <code>{_fmt(avg_cost, nd=6)}</code></div>
-          <div>total_cost: <code>{_fmt(total_cost, nd=3)}</code></div>
-          {extras_html}
+          <div class='muted small'>source: {_link(src_path, src_path.name)}</div>
+          <div>avg_cost_per_tx: <code>{_fmt(c.get("avg_cost_per_tx"), nd=6)}</code></div>
+          <div>total_cost: <code>{_fmt(c.get("total_cost"), nd=3)}</code></div>
         </div>
         """
 
-    cost_html = "<div class='grid'>" + _cost_block(
-        "TABULAR cost (TEST)", cost_tab, cost_tab_path
-    ) + _cost_block(
-        "FUSION_EXTERNAL cost (TEST)", cost_fus, cost_fus_path
-    ) + "</div>"
+    cost_html = (
+        "<div class='grid'>"
+        + _cost_block("TABULAR cost (TEST)", cost_tab, cost_tab_path)
+        + _cost_block("FUSION_EXTERNAL cost (TEST)", cost_fus, cost_fus_path)
+        + "</div>"
+    )
 
     # ---------
-    # Comparison table block
+    # Comparison table
     # ---------
     comp_html = f"""
     <div class='card'>
       <h2>Model comparison</h2>
-      <div class='muted small'>Saved: <code>{_norm(comp_path)}</code></div>
+      <div class='muted small'>
+        Saved: {_link(comp_path, "model_comparison.csv")}
+        &nbsp;|&nbsp; Sort: <code>fusion_external</code> first, then by <code>TEST PR-AUC desc</code>, <code>TEST logloss asc</code>.
+      </div>
       {_df_to_html(comp, max_rows=50)}
     </div>
     """
 
     # ---------
-    # Final HTML
+    # Page
     # ---------
     html = f"""
     <html>
       <head>
         <meta charset="utf-8"/>
-        <title>VKР Fraud System — Auto Report</title>
+        <title>VKR Fraud System — Auto Report</title>
         {css}
       </head>
       <body>
-        <h1>VKР Fraud System — Auto Report (A11)</h1>
+        <h1>VKR Fraud System — Auto Report (A11)</h1>
         <div class="muted">
           This report is generated from saved artifacts (no training). It is suitable for РПЗ / презентация.
         </div>
 
-        {main_card_html}
+        {main_summary_html}
 
         {comp_html}
 

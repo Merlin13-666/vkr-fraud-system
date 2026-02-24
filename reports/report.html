@@ -1,0 +1,500 @@
+
+    <html>
+      <head>
+        <meta charset="utf-8"/>
+        <title>VKR Fraud System — Auto Report</title>
+        
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; }
+      h1, h2, h3 { margin-top: 22px; }
+      .muted { color: #555; }
+      .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 14px 0; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 6px 8px; }
+      th { background: #f7f7f7; }
+      img { max-width: 100%; height: auto; border: 1px solid #eee; border-radius: 10px; }
+      code { background: #f3f3f3; padding: 2px 5px; border-radius: 6px; }
+      .small { font-size: 12px; }
+      .ok { color: #0a7; font-weight: bold; }
+    </style>
+    
+      </head>
+      <body>
+        <h1>VKR Fraud System — Auto Report (A11)</h1>
+        <div class="muted">
+          This report is generated from saved artifacts (no training). It is suitable for РПЗ / презентация.
+        </div>
+
+        
+        <div class="card">
+          <h2>Главный результат системы (для РПЗ)</h2>
+          <div class="muted small">
+            Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
+            trained_on: <code>external_val</code>,
+            used_gnn: <code>calibrated</code><br/>
+            metrics source: <a href="artifacts/evaluation/fusion_metrics_external.json">fusion_metrics_external.json</a>
+          </div>
+          <div class="grid">
+            <div>
+              <b>TEST</b><br/>
+              logloss: <code class="ok">0.089348</code><br/>
+              PR-AUC: <code class="ok">0.518385</code><br/>
+              ROC-AUC: <code class="ok">0.904633</code>
+            </div>
+            <div>
+              <b>Thresholds</b><br/>
+              t_review: <code>0.048092</code><br/>
+              t_deny: <code>0.275881</code><br/>
+              <span class="muted small">
+                constraints: max_fpr_deny=0.01 | max_review_share=0.1
+              </span>
+              <div class="muted small">source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
+            </div>
+          </div>
+        </div>
+        
+
+        
+    <div class='card'>
+      <h2>Model comparison</h2>
+      <div class='muted small'>
+        Saved: <a href="reports/tables/model_comparison.csv">model_comparison.csv</a>
+        &nbsp;|&nbsp; Sort: <code>fusion_external</code> first, then by <code>TEST PR-AUC desc</code>, <code>TEST logloss asc</code>.
+      </div>
+      <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>model_key</th>
+      <th>model</th>
+      <th>val_logloss</th>
+      <th>val_pr_auc</th>
+      <th>val_roc_auc</th>
+      <th>test_logloss</th>
+      <th>test_pr_auc</th>
+      <th>test_roc_auc</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>fusion_external</td>
+      <td>Fusion (external honest, trained on external VAL, tested on external TEST)</td>
+      <td>0.095321</td>
+      <td>0.589863</td>
+      <td>0.910820</td>
+      <td>0.089348</td>
+      <td>0.518385</td>
+      <td>0.904633</td>
+    </tr>
+    <tr>
+      <td>fusion_internal</td>
+      <td>Fusion (internal, for ablation only)</td>
+      <td>0.041973</td>
+      <td>0.903331</td>
+      <td>0.983454</td>
+      <td>0.038105</td>
+      <td>0.901358</td>
+      <td>0.983915</td>
+    </tr>
+    <tr>
+      <td>tabular</td>
+      <td>Tabular (LightGBM)</td>
+      <td>0.098034</td>
+      <td>0.587461</td>
+      <td>0.910502</td>
+      <td>0.090522</td>
+      <td>0.520658</td>
+      <td>0.906034</td>
+    </tr>
+    <tr>
+      <td>gnn_internal</td>
+      <td>GNN (internal split inside train graph)</td>
+      <td>0.255080</td>
+      <td>0.383348</td>
+      <td>0.804521</td>
+      <td>0.278127</td>
+      <td>0.262192</td>
+      <td>0.742413</td>
+    </tr>
+    <tr>
+      <td>gnn_external</td>
+      <td>GNN (external inductive, future split)</td>
+      <td>0.252756</td>
+      <td>0.220835</td>
+      <td>0.751391</td>
+      <td>0.244505</td>
+      <td>0.189741</td>
+      <td>0.707581</td>
+    </tr>
+  </tbody>
+</table>
+    </div>
+    
+
+        <h2>Per-model metrics</h2>
+        
+            <div class="card">
+              <h3>Fusion (external honest, trained on external VAL, tested on external TEST)</h3>
+              <div class="muted small">
+                key: <code>fusion_external</code>
+                &nbsp;|&nbsp;trained_on=external_val | used_gnn=calibrated
+              </div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.095321</code><br/>
+                  PR-AUC: <code>0.589863</code><br/>
+                  ROC-AUC: <code>0.910820</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.089348</code><br/>
+                  PR-AUC: <code>0.518385</code><br/>
+                  ROC-AUC: <code>0.904633</code>
+                </div>
+              </div>
+            </div>
+            
+
+            <div class="card">
+              <h3>Tabular (LightGBM)</h3>
+              <div class="muted small">
+                key: <code>tabular</code>
+                
+              </div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.098034</code><br/>
+                  PR-AUC: <code>0.587461</code><br/>
+                  ROC-AUC: <code>0.910502</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.090522</code><br/>
+                  PR-AUC: <code>0.520658</code><br/>
+                  ROC-AUC: <code>0.906034</code>
+                </div>
+              </div>
+            </div>
+            
+
+            <div class="card">
+              <h3>GNN (internal split inside train graph)</h3>
+              <div class="muted small">
+                key: <code>gnn_internal</code>
+                &nbsp;|&nbsp;pos_weight=33.578
+              </div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.255080</code><br/>
+                  PR-AUC: <code>0.383348</code><br/>
+                  ROC-AUC: <code>0.804521</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.278127</code><br/>
+                  PR-AUC: <code>0.262192</code><br/>
+                  ROC-AUC: <code>0.742413</code>
+                </div>
+              </div>
+            </div>
+            
+
+            <div class="card">
+              <h3>Fusion (internal, for ablation only)</h3>
+              <div class="muted small">
+                key: <code>fusion_internal</code>
+                
+              </div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.041973</code><br/>
+                  PR-AUC: <code>0.903331</code><br/>
+                  ROC-AUC: <code>0.983454</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.038105</code><br/>
+                  PR-AUC: <code>0.901358</code><br/>
+                  ROC-AUC: <code>0.983915</code>
+                </div>
+              </div>
+            </div>
+            
+
+            <div class="card">
+              <h3>GNN (external inductive, future split)</h3>
+              <div class="muted small">
+                key: <code>gnn_external</code>
+                
+              </div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.252756</code><br/>
+                  PR-AUC: <code>0.220835</code><br/>
+                  ROC-AUC: <code>0.751391</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.244505</code><br/>
+                  PR-AUC: <code>0.189741</code><br/>
+                  ROC-AUC: <code>0.707581</code>
+                </div>
+              </div>
+            </div>
+            
+
+        <h2>PR curves</h2>
+        <div class="grid">
+          <div class='card'><h3>PR-кривая: Tabular (LightGBM)</h3><img src="assets/pr_curve_tabular.png" alt="pr_curve_tabular.png"/></div>
+<div class='card'><h3>PR-кривая: GNN (internal, ablation)</h3><img src="assets/pr_curve_gnn_internal.png" alt="pr_curve_gnn_internal.png"/></div>
+<div class='card'><h3>PR-кривая: Fusion (internal, ablation)</h3><img src="assets/pr_curve_fusion_internal.png" alt="pr_curve_fusion_internal.png"/></div>
+<div class='card'><h3>PR-кривая: GNN (external, inductive) — VAL</h3><img src="assets/pr_curve_gnn_external_val.png" alt="pr_curve_gnn_external_val.png"/></div>
+<div class='card'><h3>PR-кривая: Fusion (external, честный режим) — VAL</h3><img src="assets/pr_curve_fusion_external.png" alt="pr_curve_fusion_external.png"/></div>
+        </div>
+
+        <h2>Thresholding policy</h2>
+        <div class='grid'>
+        <div class='card'>
+          <h3>TABULAR thresholds</h3>
+          <div>t_review: <code>0.030575</code></div>
+          <div>t_deny: <code>0.184445</code></div>
+          <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
+          <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_tabular.json">thresholds_tabular.json</a></div>
+        </div>
+        
+        <div class='card'>
+          <h3>FUSION_EXTERNAL thresholds</h3>
+          <div>t_review: <code>0.048092</code></div>
+          <div>t_deny: <code>0.275881</code></div>
+          <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
+          <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
+        </div>
+        </div>
+
+        <h2>Decision zones (preview)</h2>
+        
+    <div class='grid'>
+      
+        <div class='card'>
+          <h3>TABULAR decision zones (VAL)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_tabular_val.csv">decision_zones_tabular_val.csv</a></div>
+          <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>zone</th>
+      <th>n</th>
+      <th>share</th>
+      <th>fraud_rate</th>
+      <th>score_min</th>
+      <th>score_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>allow</td>
+      <td>90766</td>
+      <td>0.874002</td>
+      <td>0.011039</td>
+      <td>0.000209</td>
+      <td>0.030573</td>
+    </tr>
+    <tr>
+      <td>review</td>
+      <td>10086</td>
+      <td>0.097120</td>
+      <td>0.110648</td>
+      <td>0.030575</td>
+      <td>0.184245</td>
+    </tr>
+    <tr>
+      <td>deny</td>
+      <td>2999</td>
+      <td>0.028878</td>
+      <td>0.667556</td>
+      <td>0.184445</td>
+      <td>0.998955</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
+      
+        <div class='card'>
+          <h3>TABULAR decision zones (TEST)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_tabular_test.csv">decision_zones_tabular_test.csv</a></div>
+          <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>zone</th>
+      <th>n</th>
+      <th>share</th>
+      <th>fraud_rate</th>
+      <th>score_min</th>
+      <th>score_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>allow</td>
+      <td>92244</td>
+      <td>0.888226</td>
+      <td>0.010212</td>
+      <td>0.000191</td>
+      <td>0.030570</td>
+    </tr>
+    <tr>
+      <td>review</td>
+      <td>9164</td>
+      <td>0.088241</td>
+      <td>0.112833</td>
+      <td>0.030576</td>
+      <td>0.184352</td>
+    </tr>
+    <tr>
+      <td>deny</td>
+      <td>2444</td>
+      <td>0.023533</td>
+      <td>0.601882</td>
+      <td>0.184650</td>
+      <td>0.998326</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
+      
+        <div class='card'>
+          <h3>FUSION_EXTERNAL decision zones (VAL)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_fusion_external_val.csv">decision_zones_fusion_external_val.csv</a></div>
+          <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>zone</th>
+      <th>n</th>
+      <th>share</th>
+      <th>fraud_rate</th>
+      <th>score_min</th>
+      <th>score_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>allow</td>
+      <td>90756</td>
+      <td>0.873906</td>
+      <td>0.010886</td>
+      <td>0.000189</td>
+      <td>0.048083</td>
+    </tr>
+    <tr>
+      <td>review</td>
+      <td>10085</td>
+      <td>0.097110</td>
+      <td>0.110957</td>
+      <td>0.048092</td>
+      <td>0.275849</td>
+    </tr>
+    <tr>
+      <td>deny</td>
+      <td>3010</td>
+      <td>0.028984</td>
+      <td>0.668771</td>
+      <td>0.275881</td>
+      <td>0.999507</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
+      
+        <div class='card'>
+          <h3>FUSION_EXTERNAL decision zones (TEST)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_fusion_external_test.csv">decision_zones_fusion_external_test.csv</a></div>
+          <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>zone</th>
+      <th>n</th>
+      <th>share</th>
+      <th>fraud_rate</th>
+      <th>score_min</th>
+      <th>score_max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>allow</td>
+      <td>92761</td>
+      <td>0.893204</td>
+      <td>0.010597</td>
+      <td>0.000163</td>
+      <td>0.048089</td>
+    </tr>
+    <tr>
+      <td>review</td>
+      <td>8698</td>
+      <td>0.083754</td>
+      <td>0.117038</td>
+      <td>0.048096</td>
+      <td>0.275478</td>
+    </tr>
+    <tr>
+      <td>deny</td>
+      <td>2393</td>
+      <td>0.023042</td>
+      <td>0.604262</td>
+      <td>0.275982</td>
+      <td>0.999035</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
+    </div>
+    
+
+        <h2>Zone share plots</h2>
+        <div class="grid">
+          <div class='card'><h3>Доли зон: Tabular — VAL</h3><img src="assets/zone_share_tabular_val.png" alt="zone_share_tabular_val.png"/></div>
+<div class='card'><h3>Доли зон: Tabular — TEST</h3><img src="assets/zone_share_tabular_test.png" alt="zone_share_tabular_test.png"/></div>
+<div class='card'><h3>Доли зон: Fusion external — VAL</h3><img src="assets/zone_share_fusion_external_val.png" alt="zone_share_fusion_external_val.png"/></div>
+<div class='card'><h3>Доли зон: Fusion external — TEST</h3><img src="assets/zone_share_fusion_external_test.png" alt="zone_share_fusion_external_test.png"/></div>
+        </div>
+
+        <h2>Economics / cost (TEST)</h2>
+        <div class='grid'>
+        <div class='card'>
+          <h3>TABULAR cost (TEST)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/cost_tabular_test.json">cost_tabular_test.json</a></div>
+          <div>avg_cost_per_tx: <code>2.459057</code></div>
+          <div>total_cost: <code>255378.000</code></div>
+        </div>
+        
+        <div class='card'>
+          <h3>FUSION_EXTERNAL cost (TEST)</h3>
+          <div class='muted small'>source: <a href="artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
+          <div>avg_cost_per_tx: <code>2.516524</code></div>
+          <div>total_cost: <code>261346.000</code></div>
+        </div>
+        </div>
+
+        <h2>Notes for РПЗ</h2>
+        <div class="card">
+          <ul>
+            <li><b>fusion_external</b> is the main system mode (honest evaluation on future split).</li>
+            <li>Internal GNN/Fusion metrics are shown for ablation and debugging only.</li>
+            <li>Thresholds are fitted on VAL (constraints: max FPR for deny + max share for review).</li>
+          </ul>
+        </div>
+
+        <div class="muted small">
+          Generated files: <code>reports/report.html</code>, <code>reports/assets/</code>, <code>reports/tables/</code>.
+        </div>
+      </body>
+    </html>
+    
