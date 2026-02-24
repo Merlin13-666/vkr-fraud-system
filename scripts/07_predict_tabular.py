@@ -21,13 +21,18 @@ def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Batch predict with tabular model + policy")
     parser.add_argument("--input", required=True, help="Input csv or parquet file")
     parser.add_argument("--model", required=True, help="Path to model.pkl")
     parser.add_argument("--thresholds", required=True, help="Path to thresholds json")
     parser.add_argument("--feature-spec", required=True, help="Path to tabular_feature_spec.json")
     parser.add_argument("--out", required=True, help="Output parquet path")
+
+    # B1.2
+    parser.add_argument("--with-reasons", action="store_true", help="Add top SHAP reasons per transaction (top-5 by default)")
+    parser.add_argument("--reasons-topk", type=int, default=5, help="How many top reasons to keep")
+    parser.add_argument("--reasons-max-rows", type=int, default=5000, help="Max rows for reasons (CPU safety)")
 
     args = parser.parse_args()
 
@@ -53,6 +58,9 @@ def main():
         model=model,
         thresholds=thresholds,
         feature_spec=feature_spec,
+        with_reasons=bool(args.with_reasons),
+        reasons_topk=int(args.reasons_topk),
+        reasons_max_rows=int(args.reasons_max_rows),
     )
 
     preds.to_parquet(out_path, index=False)
@@ -63,6 +71,8 @@ def main():
 
     print(f"[A8] Saved predictions: {out_path}")
     print(f"[A8] Saved summary: {summary_path}")
+    if args.with_reasons:
+        print("[A8] Reasons enabled: column 'top_reasons' added (JSON string per transaction).")
     print("[A8] Done.")
 
 
