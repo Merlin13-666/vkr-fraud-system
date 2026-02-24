@@ -21,8 +21,13 @@ def _binary_logloss(y: np.ndarray, p: np.ndarray) -> float:
 
 def apply_temperature(logits: np.ndarray, T: float) -> np.ndarray:
     z = logits / max(T, 1e-6)
-    # sigmoid
-    return 1.0 / (1.0 + np.exp(-z))
+    # numerically stable sigmoid
+    out = np.empty_like(z, dtype=np.float64)
+    pos = z >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
+    ez = np.exp(z[~pos])
+    out[~pos] = ez / (1.0 + ez)
+    return out
 
 
 def fit_temperature_on_logits(
