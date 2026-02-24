@@ -1,45 +1,78 @@
 # VKR Fraud System
 
-Система обнаружения мошеннических банковских транзакций на основе гибридного подхода:
-- **tabular scorer** (LightGBM)
-- **graph scorer** (GNN на гетерографе: Hetero GraphSAGE)
-- далее (следующие шаги): **fusion**, пороги решений allow/review/deny, explainability, predict из raw.
+**Тема ВКР:** *Система обнаружения мошеннических банковских транзакций*  
+Реализована воспроизводимая система на основе **гибридного подхода**:
 
-Проект предназначен для воспроизводимого запуска пайплайна:
-**prepare → train → graph → gnn → (fusion) → evaluate → predict**
-
----
-
-## Требования
-
-- Python 3.10+
-- PyCharm Community (опционально)
-- Датасет: IEEE-CIS Fraud Detection (Kaggle)
+- **Tabular scorer:** LightGBM (табличная модель)
+- **Graph scorer:** GNN на гетерографе (Hetero GraphSAGE, PyTorch Geometric)
+- **Fusion:** логистическая регрессия по выходам скореров (**честный режим** = обучение на external VAL, тест на external TEST)
+- **Policy:** пороги `ALLOW/REVIEW/DENY` + таблицы зон + простая экономика (cost)
+- **Auto-report:** HTML отчёт (таблицы + картинки) пригодный для РПЗ/презентации
+- **One-click:** полный запуск одной командой (A12)
 
 ---
 
-## Установка
+## 0) Требования
 
-1) Создать виртуальное окружение (пример для Windows PowerShell):
+- Python **3.10+**
+- Датасет: **IEEE-CIS Fraud Detection** (Kaggle), файлы:
+  - `train_transaction.csv`
+  - `train_identity.csv`
+
+---
+
+## 1) Установка
+
+### 1.1 Виртуальное окружение (Windows PowerShell)
 
 ```bash
 python -m venv .venv
 .\.venv\Scripts\activate
-```
-2) Установить зависимости:
+````
+
+### 1.2 Зависимости
+
+Базово:
+
 ```bash
 pip install -r requirements.txt
 ```
-Для CPU-версий torch/pyg можно использовать дополнительные файлы:
-- requirements_torch_cpu.txt 
-- requirements_pyg_cpu.txt
 
-## Быстрая проверка окружения (A0)
+Если используешь CPU torch/pyg (как у тебя):
+
+* `requirements_torch_cpu.txt`
+* `requirements_pyg_cpu.txt`
+
+---
+
+## 2) Быстрый старт (одна кнопка, A12)
+
+Полный прогон пайплайна (если артефакты уже есть — шаги будут пропускаться):
+
 ```bash
 python -m scripts.run_all
 ```
-## Структура проекта
-```commandline
+
+Полезные режимы:
+
+```bash
+# пересчитать всё (если хочешь “с нуля”)
+python -m scripts.run_all --force
+
+# пропустить внешнюю часть (A9/A10)
+python -m scripts.run_all --skip-external
+
+# прогнать только оценку+отчёт (если модели уже готовы)
+python -m scripts.run_all --from-step A7_evaluate --to-step A11_auto_report
+```
+
+**Результат:** итоговый отчёт: `reports/report.html`
+
+---
+
+## 3) Структура проекта
+
+```text
 vkr_fraud_system/
   configs/
     base.yaml
@@ -47,11 +80,17 @@ vkr_fraud_system/
   data/
     raw/                # сырые csv/parquet (не коммитятся)
     processed/          # подготовленные parquet (не коммитятся)
-    splits/             # split_info.json (можно хранить)
+    splits/             # split_info.json
   artifacts/
     tabular/            # model.pkl (не коммитится)
-    graph/              # node_map, edges, graph_data.pt (не коммитится)
+    graph/              # node_map, edges, graph_data.pt, gnn_model.pt (не коммитится)
+    fusion/             # fusion.pkl, fusion_external.pkl (не коммитится)
+    thresholds/         # thresholds_*.json
     evaluation/         # метрики, кривые, предикты (не коммитится)
+  reports/
+    report.html
+    assets/
+    tables/
   src/
     fraud_system/
       io/
@@ -66,166 +105,229 @@ vkr_fraud_system/
     02_build_graph.py
     03_make_graph_data.py
     04_train_gnn.py
+    05_train_fusion.py
+    06_evaluate.py
+    07_predict_tabular.py
+    08_predict_gnn_external.py
+    09_calibrate_gnn.py
+    10_train_fusion_external.py
+    11_auto_report.py
+    run_all.py
 ```
-## Архитектура пайплайна
-raw → schema → merge → time split → processed → (tabular train / graph build / gnn train) → evaluation → (fusion) → predict
 
-## A2. Подготовка данных (prepare + time split)
-Запуск:
+---
+
+## 4) Архитектура пайплайна
+
+**train path:**
+
+raw → schema → merge → time split → processed →
+(tabular train) + (graph build → gnn train) → (fusion) → evaluate → report
+
+**inference path (система):**
+
+raw → schema → features → tabular + (gnn inductive) → fusion_external → thresholds → decision
+
+---
+
+## 5) Пошаговый запуск (если без A12)
+
+### A2. Подготовка данных (prepare + time split)
+
 ```bash
 python -m scripts.00_prepare_data
 ```
-#### Что делает скрипт:
-1) Загружает сырые данные IEEE-CIS из:
-   - data/raw/ieee-cis/train_transaction.csv 
-   - data/raw/ieee-cis/train_identity.csv
-2) Объединяет transaction + identity по TransactionID 
-3) Применяет schema-мэппинг (configs/schema_ieee_cis.yaml):
-    - приводит к каноническим колонкам: transaction_id, time, target 
-    - выполняет валидацию и приведение типов
-4) Делает time-based split (60% / 20% / 20%) без утечки по времени 
-   5) Сохраняет:
-    - data/processed/train.parquet 
-    - data/processed/val.parquet 
-    - data/processed/test.parquet 
-    - data/splits/split_info.json 
-    - artifacts/evaluation/columns.json
 
-После выполнения этого шага данные считаются “единой истиной” для всех моделей.
-## A3. Tabular baseline (LightGBM)
-Запуск:
+Что делает:
+
+1. Загружает IEEE-CIS:
+
+   * `data/raw/ieee-cis/train_transaction.csv`
+   * `data/raw/ieee-cis/train_identity.csv`
+2. Merge по TransactionID
+3. Schema mapping (`configs/schema_ieee_cis.yaml`):
+
+   * канонические поля: `transaction_id`, `time`, `target`
+4. Time-based split (60/20/20) без утечки по времени
+5. Сохраняет:
+
+   * `data/processed/train.parquet`
+   * `data/processed/val.parquet`
+   * `data/processed/test.parquet`
+   * `data/splits/split_info.json`
+   * `artifacts/evaluation/columns.json`
+
+---
+
+### A3. Tabular baseline (LightGBM)
+
 ```bash
 python -m scripts.01_train_tabular
 ```
-Выходные артефакты:
-   - модель: artifacts/tabular/model.pkl 
-   - метрики: artifacts/evaluation/tabular_metrics.json 
-   - PR-кривая: artifacts/evaluation/pr_curve_tabular.png 
-   - предсказания:
-     - artifacts/evaluation/val_pred_tabular.parquet 
-     - artifacts/evaluation/test_pred_tabular.parquet
 
-## A4. Построение гетерографа (node_map + edges + graph_data)
-### A4.1 Build graph artifacts
-Запуск:
+Артефакты:
+
+* `artifacts/tabular/model.pkl`
+* `artifacts/evaluation/tabular_metrics.json`
+* `artifacts/evaluation/pr_curve_tabular.png`
+* `artifacts/evaluation/val_pred_tabular.parquet`
+* `artifacts/evaluation/test_pred_tabular.parquet`
+* `artifacts/evaluation/tabular_feature_spec.json`
+
+---
+
+### A4. Построение гетерографа
+
+#### A4.1 Build graph artifacts
+
 ```bash
 python -m scripts.02_build_graph
 ```
-Что сохраняется:
-   - artifacts/graph/node_map.parquet 
-   - artifacts/graph/edges.parquet 
-   - artifacts/graph/graph_info.json
 
-Особенности:
-   - сущности строятся с фильтром редких значений min_freq 
-   - значения сущностей префиксуются (например DeviceInfo::...), чтобы избежать смешения доменов
+Артефакты:
 
-### A4.2 Convert to PyG HeteroData
-Запуск:
+* `artifacts/graph/node_map.parquet`
+* `artifacts/graph/edges.parquet`
+* `artifacts/graph/graph_info.json`
+
+#### A4.2 Convert to PyG HeteroData
+
 ```bash
 python -m scripts.03_make_graph_data
 ```
-Что сохраняется:
-   - artifacts/graph/graph_data.pt (PyG HeteroData)
-   - artifacts/graph/tx_index.parquet (transaction_id → tx_node_id)
-## A5. GNN scorer (Hetero GraphSAGE, CPU)
 
-Постановка:
-   - node classification на узлах transaction 
-   - граф построен на train-only периоде 
-   - оценка проводится на time-based holdout внутри train-graph 
-   - индуктивный режим для новых транзакций будет реализован на этапе predict (следующие шаги)
+Артефакты:
 
-Запуск:
+* `artifacts/graph/graph_data.pt` (PyG HeteroData)
+* `artifacts/graph/tx_index.parquet` (transaction_id → tx_node_id)
+
+---
+
+### A5. GNN scorer (Hetero GraphSAGE, internal)
+
 ```bash
 python -m scripts.04_train_gnn
 ```
-Выходные артефакты:
-   - модель: artifacts/graph/gnn_model.pt 
-   - метрики: artifacts/evaluation/gnn_metrics.json 
-   - PR-кривая: artifacts/evaluation/pr_curve_gnn.png 
-   - предсказания:
-     - artifacts/evaluation/val_pred_gnn.parquet 
-     - artifacts/evaluation/test_pred_gnn.parquet 
-     - artifacts/evaluation/train_pred_gnn.parquet (если включено)
 
+Артефакты:
 
+* `artifacts/graph/gnn_model.pt`
+* `artifacts/graph/tx_scaler.json`
+* `artifacts/evaluation/gnn_metrics.json`
+* `artifacts/evaluation/pr_curve_gnn.png`
+* `artifacts/evaluation/val_pred_gnn.parquet`
+* `artifacts/evaluation/test_pred_gnn.parquet`
 
+Примечание: internal режим используется для абляции/отладки (не является “честной” оценкой на будущих данных).
 
-## Примечания
+---
 
-Папки data/processed/ и artifacts/ являются генерируемыми и обычно не коммитятся в git.
+### A6. Fusion internal (ablation)
 
-Все параметры путей и настроек лежат в configs/base.yaml.
-
-## A6. Fusion (Stacking, train-only graph mode)
-В текущей версии GNN построен на train-периоде и использует внутренний time-split.
-
-Fusion обучается в режиме:
-   - tabular(train)\
-   - gnn(train / val_internal / test_internal)
-
-⚠️ Результаты fusion в этом режиме являются внутренними (internal) и используются для анализа взаимодействия скореров.
-
-Для финальной оценки обобщающей способности требуется индуктивный режим GNN (см. A7).
-
-Запуск:
 ```bash
 python -m scripts.05_train_fusion
 ```
-Выход:
-   - artifacts/fusion/fusion.pkl 
-   - artifacts/evaluation/fusion_metrics_internal.json 
-   - artifacts/evaluation/*_fusion_internal.parquet 
-   - artifacts/evaluation/pr_curve_fusion_internal.png
 
-## A7. Evaluate + thresholds + decisions (allow/review/deny)
+Артефакты:
 
-На этапе A7 подбираются пороги решений для системы на основе вероятности мошенничества.
+* `artifacts/fusion/fusion.pkl`
+* `artifacts/evaluation/fusion_metrics_internal.json`
+* `artifacts/evaluation/pr_curve_fusion_internal.png`
 
-Политика решений:
-- `p >= T_deny`  → **DENY**
-- `T_review <= p < T_deny` → **REVIEW**
-- `p < T_review` → **ALLOW**
+---
 
-Пороги подбираются на **валидационной выборке** (VAL) и фиксируются,
-после чего оцениваются на **тестовой выборке** (TEST).
+### A9. Inductive GNN predict (external, честный режим для графа)
 
-По умолчанию используются ограничения:
-- максимальный FPR для зоны DENY: `max_fpr_deny = 0.01`
-- максимальная доля операций в зоне REVIEW: `max_review_share = 0.10`
+```bash
+python -m scripts.08_predict_gnn_external --split val
+python -m scripts.08_predict_gnn_external --split test
+```
 
-Запуск:
+Артефакты:
+
+* `artifacts/evaluation/val_pred_gnn_external.parquet`
+* `artifacts/evaluation/test_pred_gnn_external.parquet`
+* `artifacts/evaluation/gnn_external_metrics_val.json`
+* `artifacts/evaluation/gnn_external_metrics_test.json`
+
+---
+
+### A9.3 Calibration (temperature scaling)
+
+```bash
+python -m scripts.09_calibrate_gnn
+```
+
+Артефакты:
+
+* `artifacts/graph/gnn_temperature.json`
+* `artifacts/evaluation/val_pred_gnn_external_calibrated.parquet`
+* `artifacts/evaluation/test_pred_gnn_external_calibrated.parquet`
+
+---
+
+### A10. Fusion external (главный режим системы)
+
+**Это основной “честный” режим ВКР:**
+
+* обучение мета-модели на **external VAL**
+* тест на **external TEST**
+
+```bash
+python -m scripts.10_train_fusion_external
+```
+
+Артефакты:
+
+* `artifacts/fusion/fusion_external.pkl`
+* `artifacts/evaluation/fusion_metrics_external.json`
+* `artifacts/evaluation/pr_curve_fusion_external.png`
+* `artifacts/evaluation/val_pred_fusion_external.parquet`
+* `artifacts/evaluation/test_pred_fusion_external.parquet`
+
+---
+
+### A7. Evaluate + thresholds + decisions (ALLOW/REVIEW/DENY) + cost
 
 ```bash
 python -m scripts.06_evaluate
 ```
-Выходные файлы:
-- `artifacts/thresholds/thresholds_tabular.json` — выбранные пороги `T_review`, `T_deny`
-- `artifacts/evaluation/decision_zones_tabular_val.csv` — таблица зон на VAL
-- `artifacts/evaluation/decision_zones_tabular_test.csv` — таблица зон на TEST
-- `artifacts/evaluation/decision_binary_tabular_val.csv` — метрики deny-порога на VAL (Precision/Recall/FPR)
-- `artifacts/evaluation/decision_binary_tabular_test.csv` — метрики deny-порога на TEST
-- `artifacts/evaluation/evaluate_summary.json` — сводка метрик + политика порогов
 
-Пороги подбираются на VAL и применяются на TEST без переобучения.
+Что делает:
 
-### A7.2 (дополнительно)
-Скрипт также строит:
-- графики долей операций по зонам (VAL/TEST)
-- простую модель экономических потерь (cost) на TEST
+* считает метрики (logloss / PR-AUC / ROC-AUC)
+* подбирает пороги `T_review`, `T_deny` на VAL
+* строит таблицы зон и доли зон на VAL/TEST
+* считает простую модель экономических потерь (cost)
 
-Выход:
-- `artifacts/evaluation/zone_share_tabular_val.png`
-- `artifacts/evaluation/zone_share_tabular_test.png`
-- `artifacts/evaluation/cost_tabular_test.json`
+Выходные файлы (tabular и fusion_external):
 
-## A8. Batch Predict (Tabular + Policy)
+* `artifacts/thresholds/thresholds_tabular.json`
+* `artifacts/thresholds/thresholds_fusion_external.json`
+* `artifacts/evaluation/decision_zones_*.csv`
+* `artifacts/evaluation/decision_binary_*.csv`
+* `artifacts/evaluation/zone_share_*.png`
+* `artifacts/evaluation/cost_*_test.json`
 
-Модуль пакетного инференса принимает на вход транзакции в формате CSV или Parquet,
-применяет табличную модель и политику порогов (allow/review/deny).
+---
 
-Запуск:
+### A11. Auto-report (таблицы + картинки “для РПЗ/презы”)
+
+```bash
+python -m scripts.11_auto_report
+```
+
+Артефакты:
+
+* `reports/report.html`
+* `reports/tables/model_comparison.csv`
+* `reports/assets/*.png`
+
+---
+
+## 6) Batch Predict (Tabular + Policy)
+
+Пакетный инференс для табличной модели (пример):
 
 ```bash
 python -m scripts.07_predict_tabular \
@@ -235,25 +337,27 @@ python -m scripts.07_predict_tabular \
   --feature-spec artifacts/evaluation/tabular_feature_spec.json \
   --out artifacts/predict/test_tabular.parquet
 ```
-Выход:
-- predictions.parquet — transaction_id, p_tabular, decision 
-- summary.json — статистика распределения решений
 
-## A9. Inductive GNN predict (external)
+---
 
-На этапе A9 GNN применяется в индуктивном режиме к внешним выборкам VAL/TEST:
-для новых транзакций строятся связи к сущностям графа через `node_map`.
-Неизвестные сущности мапятся в UNK-node (по одному на тип).
+## 7) Git / воспроизводимость
 
-Запуск:
-```bash
-python -m scripts.08_predict_gnn_external --split val
-python -m scripts.08_predict_gnn_external --split test
-```
-Выход:
-- artifacts/evaluation/val_pred_gnn_external.parquet 
-- artifacts/evaluation/test_pred_gnn_external.parquet 
-- artifacts/evaluation/gnn_external_metrics_val.json 
-- artifacts/evaluation/gnn_external_metrics_test.json 
-- artifacts/evaluation/gnn_external_mapping_val.json (статистика unknown)
-- artifacts/evaluation/gnn_external_mapping_test.json
+Рекомендации:
+
+* `data/processed/` и `artifacts/` — генерируемые, обычно **не коммитятся**
+* Коммитим: `src/`, `scripts/`, `configs/`, `README.md`
+* После каждого шага (A2..A12) делаем commit с понятным сообщением вида:
+
+  * `A10: train fusion external (honest mode)`
+  * `A11: auto report for RПЗ`
+
+---
+
+## 8) Главный режим ВКР (что показывать комиссии)
+
+1. `fusion_external` (A10) — честная оценка на future split
+2. `scripts.06_evaluate` (A7) — пороги/зоны/экономика
+3. `reports/report.html` (A11) — пакет результатов для РПЗ/презы
+4. `python -m scripts.run_all` (A12) — “система одной командой”
+
+````

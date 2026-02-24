@@ -38,14 +38,14 @@
           <div class="grid">
             <div>
               <b>TEST</b><br/>
-              logloss: <code class="ok">0.089348</code><br/>
-              PR-AUC: <code class="ok">0.518385</code><br/>
-              ROC-AUC: <code class="ok">0.904633</code>
+              logloss: <code class="ok">0.089308</code><br/>
+              PR-AUC: <code class="ok">0.518383</code><br/>
+              ROC-AUC: <code class="ok">0.905084</code>
             </div>
             <div>
               <b>Thresholds</b><br/>
-              t_review: <code>0.048092</code><br/>
-              t_deny: <code>0.275881</code><br/>
+              t_review: <code>0.048122</code><br/>
+              t_deny: <code>0.275912</code><br/>
               <span class="muted small">
                 constraints: max_fpr_deny=0.01 | max_review_share=0.1
               </span>
@@ -79,22 +79,22 @@
     <tr>
       <td>fusion_external</td>
       <td>Fusion (external honest, trained on external VAL, tested on external TEST)</td>
-      <td>0.095321</td>
-      <td>0.589863</td>
-      <td>0.910820</td>
-      <td>0.089348</td>
-      <td>0.518385</td>
-      <td>0.904633</td>
+      <td>0.095325</td>
+      <td>0.589844</td>
+      <td>0.910814</td>
+      <td>0.089308</td>
+      <td>0.518383</td>
+      <td>0.905084</td>
     </tr>
     <tr>
       <td>fusion_internal</td>
       <td>Fusion (internal, for ablation only)</td>
-      <td>0.041973</td>
-      <td>0.903331</td>
-      <td>0.983454</td>
-      <td>0.038105</td>
-      <td>0.901358</td>
-      <td>0.983915</td>
+      <td>0.062345</td>
+      <td>0.840253</td>
+      <td>0.968756</td>
+      <td>0.061982</td>
+      <td>0.815023</td>
+      <td>0.964389</td>
     </tr>
     <tr>
       <td>tabular</td>
@@ -119,12 +119,12 @@
     <tr>
       <td>gnn_external</td>
       <td>GNN (external inductive, future split)</td>
-      <td>0.252756</td>
-      <td>0.220835</td>
-      <td>0.751391</td>
-      <td>0.244505</td>
-      <td>0.189741</td>
-      <td>0.707581</td>
+      <td>0.252498</td>
+      <td>0.219290</td>
+      <td>0.751215</td>
+      <td>0.243932</td>
+      <td>0.191268</td>
+      <td>0.707826</td>
     </tr>
   </tbody>
 </table>
@@ -142,15 +142,15 @@
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.095321</code><br/>
-                  PR-AUC: <code>0.589863</code><br/>
-                  ROC-AUC: <code>0.910820</code>
+                  logloss: <code>0.095325</code><br/>
+                  PR-AUC: <code>0.589844</code><br/>
+                  ROC-AUC: <code>0.910814</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.089348</code><br/>
-                  PR-AUC: <code>0.518385</code><br/>
-                  ROC-AUC: <code>0.904633</code>
+                  logloss: <code>0.089308</code><br/>
+                  PR-AUC: <code>0.518383</code><br/>
+                  ROC-AUC: <code>0.905084</code>
                 </div>
               </div>
             </div>
@@ -211,15 +211,15 @@
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.041973</code><br/>
-                  PR-AUC: <code>0.903331</code><br/>
-                  ROC-AUC: <code>0.983454</code>
+                  logloss: <code>0.062345</code><br/>
+                  PR-AUC: <code>0.840253</code><br/>
+                  ROC-AUC: <code>0.968756</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.038105</code><br/>
-                  PR-AUC: <code>0.901358</code><br/>
-                  ROC-AUC: <code>0.983915</code>
+                  logloss: <code>0.061982</code><br/>
+                  PR-AUC: <code>0.815023</code><br/>
+                  ROC-AUC: <code>0.964389</code>
                 </div>
               </div>
             </div>
@@ -234,15 +234,15 @@
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.252756</code><br/>
-                  PR-AUC: <code>0.220835</code><br/>
-                  ROC-AUC: <code>0.751391</code>
+                  logloss: <code>0.252498</code><br/>
+                  PR-AUC: <code>0.219290</code><br/>
+                  ROC-AUC: <code>0.751215</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.244505</code><br/>
-                  PR-AUC: <code>0.189741</code><br/>
-                  ROC-AUC: <code>0.707581</code>
+                  logloss: <code>0.243932</code><br/>
+                  PR-AUC: <code>0.191268</code><br/>
+                  ROC-AUC: <code>0.707826</code>
                 </div>
               </div>
             </div>
@@ -269,8 +269,8 @@
         
         <div class='card'>
           <h3>FUSION_EXTERNAL thresholds</h3>
-          <div>t_review: <code>0.048092</code></div>
-          <div>t_deny: <code>0.275881</code></div>
+          <div>t_review: <code>0.048122</code></div>
+          <div>t_deny: <code>0.275912</code></div>
           <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
           <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
         </div>
@@ -385,26 +385,26 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>90756</td>
-      <td>0.873906</td>
-      <td>0.010886</td>
+      <td>90755</td>
+      <td>0.873896</td>
+      <td>0.010875</td>
       <td>0.000189</td>
-      <td>0.048083</td>
+      <td>0.048121</td>
     </tr>
     <tr>
       <td>review</td>
-      <td>10085</td>
-      <td>0.097110</td>
-      <td>0.110957</td>
-      <td>0.048092</td>
-      <td>0.275849</td>
+      <td>10084</td>
+      <td>0.097101</td>
+      <td>0.110869</td>
+      <td>0.048123</td>
+      <td>0.275893</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>3010</td>
-      <td>0.028984</td>
-      <td>0.668771</td>
-      <td>0.275881</td>
+      <td>3012</td>
+      <td>0.029003</td>
+      <td>0.668991</td>
+      <td>0.275912</td>
       <td>0.999507</td>
     </tr>
   </tbody>
@@ -429,27 +429,27 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>92761</td>
-      <td>0.893204</td>
-      <td>0.010597</td>
-      <td>0.000163</td>
-      <td>0.048089</td>
+      <td>92663</td>
+      <td>0.892260</td>
+      <td>0.010554</td>
+      <td>0.000164</td>
+      <td>0.048108</td>
     </tr>
     <tr>
       <td>review</td>
-      <td>8698</td>
-      <td>0.083754</td>
-      <td>0.117038</td>
-      <td>0.048096</td>
-      <td>0.275478</td>
+      <td>8806</td>
+      <td>0.084794</td>
+      <td>0.116739</td>
+      <td>0.048124</td>
+      <td>0.275558</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>2393</td>
-      <td>0.023042</td>
-      <td>0.604262</td>
-      <td>0.275982</td>
-      <td>0.999035</td>
+      <td>2383</td>
+      <td>0.022946</td>
+      <td>0.604700</td>
+      <td>0.276139</td>
+      <td>0.999042</td>
     </tr>
   </tbody>
 </table>
@@ -478,8 +478,8 @@
         <div class='card'>
           <h3>FUSION_EXTERNAL cost (TEST)</h3>
           <div class='muted small'>source: <a href="artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
-          <div>avg_cost_per_tx: <code>2.516524</code></div>
-          <div>total_cost: <code>261346.000</code></div>
+          <div>avg_cost_per_tx: <code>2.506567</code></div>
+          <div>total_cost: <code>260312.000</code></div>
         </div>
         </div>
 
