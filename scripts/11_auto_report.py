@@ -179,10 +179,8 @@ def _build_comparison_table(blocks: List[ModelBlock]) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Cosmetic #1:
-    # Put fusion_external first (main system mode), then sort by test_pr_auc desc, test_logloss asc.
-    is_main = (df["model_key"] == "fusion_external").astype(int)
-    df["_is_main"] = is_main
+    # Put fusion_external first (main system mode), then sort by test_pr_auc desc, test_logloss asc
+    df["_is_main"] = (df["model_key"] == "fusion_external").astype(int)
     df = df.sort_values(
         by=["_is_main", "test_pr_auc", "test_logloss"],
         ascending=[False, False, True],
@@ -199,7 +197,6 @@ def _build_comparison_table(blocks: List[ModelBlock]) -> pd.DataFrame:
 def main() -> None:
     eval_dir = Path("artifacts/evaluation")
     thr_dir = Path("artifacts/thresholds")
-
     reports_dir = Path("reports")
     assets_dir = reports_dir / "assets"
     tables_dir = reports_dir / "tables"
@@ -207,6 +204,12 @@ def main() -> None:
     _ensure_dir(reports_dir)
     _ensure_dir(assets_dir)
     _ensure_dir(tables_dir)
+
+    # SHAP outputs are produced directly into reports/assets + reports/tables (by scripts/12_shap_tabular.py)
+    shap_bar = assets_dir / "shap_summary_bar.png"
+    shap_bees = assets_dir / "shap_summary_beeswarm.png"
+    shap_csv = tables_dir / "shap_top_features.csv"
+    shap_meta = tables_dir / "shap_meta.json"
 
     # ---------
     # Collect model metrics
@@ -231,7 +234,7 @@ def main() -> None:
     comp.to_csv(comp_path, index=False)
 
     # ---------
-    # Copy key figures (if exist)
+    # Copy key figures (if exist) to reports/assets
     # ---------
     figures_to_copy = [
         ("pr_curve_tabular.png", "pr_curve_tabular.png"),
@@ -276,6 +279,10 @@ def main() -> None:
     dz_tab_test_df = _read_csv_if_exists(dz_tab_test)
     dz_fus_val_df = _read_csv_if_exists(dz_fus_val)
     dz_fus_test_df = _read_csv_if_exists(dz_fus_test)
+
+    # optional: show an example predict file with reasons, if exists
+    pred_with_reasons_path = Path("artifacts/predict/test_tabular_with_reasons.parquet")
+    pred_with_reasons_exists = pred_with_reasons_path.exists()
 
     # ---------
     # Titles
@@ -353,7 +360,7 @@ def main() -> None:
         """
 
     # ---------
-    # Model blocks
+    # Model blocks section
     # ---------
     blocks_html = []
     for b in blocks:
@@ -398,7 +405,6 @@ def main() -> None:
     # ---------
     # Figures sections
     # ---------
-    pr_figs = []
     pr_order = [
         "pr_curve_tabular.png",
         "pr_curve_gnn_internal.png",
@@ -406,19 +412,20 @@ def main() -> None:
         "pr_curve_gnn_external_val.png",
         "pr_curve_fusion_external.png",
     ]
+    pr_figs = []
     for f in pr_order:
         if f in copied_figs:
             title = FIG_TITLES.get(f, f)
             pr_figs.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
     pr_figs_html = "\n".join(pr_figs)
 
-    zone_figs = []
     zone_order = [
         "zone_share_tabular_val.png",
         "zone_share_tabular_test.png",
         "zone_share_fusion_external_val.png",
         "zone_share_fusion_external_test.png",
     ]
+    zone_figs = []
     for f in zone_order:
         if f in copied_figs:
             title = FIG_TITLES.get(f, f)
@@ -449,7 +456,7 @@ def main() -> None:
     )
 
     # ---------
-    # Decision zones
+    # Decision zones blocks
     # ---------
     def _dz_block(title: str, df: Optional[pd.DataFrame], file_path: Path) -> str:
         if df is None:
@@ -472,7 +479,7 @@ def main() -> None:
     """
 
     # ---------
-    # Costs
+    # Costs blocks
     # ---------
     def _cost_block(name: str, c: Optional[Dict[str, Any]], src_path: Path) -> str:
         if not c:
@@ -494,7 +501,7 @@ def main() -> None:
     )
 
     # ---------
-    # Comparison table
+    # Comparison table block
     # ---------
     comp_html = f"""
     <div class='card'>
@@ -506,6 +513,59 @@ def main() -> None:
       {_df_to_html(comp, max_rows=50)}
     </div>
     """
+
+    # ---------
+    # SHAP section block (this was missing from insertion earlier)
+    # ---------
+    shap_html = ""
+    if shap_bar.exists():
+        shap_html_parts: List[str] = []
+        shap_html_parts.append("<h2>Интерпретация (SHAP, табличная модель)</h2>")
+        shap_html_parts.append(
+            "<div class='muted'>Глобальная важность признаков и их вклад в решение модели LightGBM. "
+            "Для batch-predict доступна опция <code>--with-reasons</code>, которая добавляет <code>top_reasons</code> (top-k вкладов SHAP на транзакцию).</div>"
+        )
+
+        shap_html_parts.append("<div class='grid'>")
+        shap_html_parts.append(
+            "<div class='card'><h3>SHAP summary (bar)</h3><img src='assets/shap_summary_bar.png' /></div>"
+        )
+        if shap_bees.exists():
+            shap_html_parts.append(
+                "<div class='card'><h3>SHAP summary (beeswarm)</h3><img src='assets/shap_summary_beeswarm.png' /></div>"
+            )
+        shap_html_parts.append("</div>")
+
+        if shap_csv.exists():
+            try:
+                df_shap = pd.read_csv(shap_csv).head(30)
+                shap_html_parts.append("<div class='card'>")
+                shap_html_parts.append("<h3>Top features (mean |SHAP|)</h3>")
+                shap_html_parts.append(_df_to_html(df_shap, max_rows=30))
+                shap_html_parts.append(
+                    f"<div class='muted small'>source: {_link(shap_csv, 'shap_top_features.csv')}</div>"
+                )
+                if shap_meta.exists():
+                    shap_html_parts.append(
+                        f"<div class='muted small'>meta: {_link(shap_meta, 'shap_meta.json')}</div>"
+                    )
+                shap_html_parts.append("</div>")
+            except Exception:
+                pass
+
+        if pred_with_reasons_exists:
+            shap_html_parts.append("<div class='card'>")
+            shap_html_parts.append("<h3>Пример output с причинами</h3>")
+            shap_html_parts.append(
+                "<div class='muted'>Файл содержит колонку <code>top_reasons</code> — JSON-массив из top-k признаков "
+                "с их значениями и вкладом SHAP (положительный → повышает риск, отрицательный → снижает).</div>"
+            )
+            shap_html_parts.append(
+                f"<div class='muted small'>example: {_link(pred_with_reasons_path, pred_with_reasons_path.name)}</div>"
+            )
+            shap_html_parts.append("</div>")
+
+        shap_html = "\n".join(shap_html_parts)
 
     # ---------
     # Page
@@ -549,6 +609,8 @@ def main() -> None:
         <h2>Economics / cost (TEST)</h2>
         {cost_html}
 
+        {shap_html}
+
         <h2>Notes for РПЗ</h2>
         <div class="card">
           <ul>
@@ -575,6 +637,8 @@ def main() -> None:
         print(f"[A11] Copied figures to: {assets_dir} ({len(copied_figs)} files)")
     else:
         print("[A11] No figures copied (some PNGs may be missing).")
+    if shap_bar.exists():
+        print("[A11] SHAP section: included (reports/assets/shap_*.png found).")
     print("[A11] Done.")
 
 
