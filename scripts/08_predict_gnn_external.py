@@ -47,15 +47,13 @@ def _load_state_with_unk_padding(model: torch.nn.Module, state: dict) -> None:
 
         # If checkpoint has N and model expects N+1: append UNK row
         if w_new.shape[0] == w_old.shape[0] + 1 and w_new.shape[1] == w_old.shape[1]:
-            unk_row = w_old.mean(dim=0, keepdim=True)  # stable init
+            unk_row = w_old.mean(dim=0, keepdim=True)
             patched[k] = torch.cat([w_old, unk_row], dim=0)
             continue
 
-        # If shapes match: ok
         if w_new.shape == w_old.shape:
             continue
 
-        # Any other mismatch is a real error
         raise RuntimeError(f"State mismatch for {k}: ckpt {tuple(w_old.shape)} vs model {tuple(w_new.shape)}")
 
     model.load_state_dict(patched, strict=False)
@@ -73,17 +71,14 @@ def main() -> None:
     processed_dir = Path("data/processed")
     _ensure_dir(eval_dir)
 
-    # Load external split
     df_ext = pd.read_parquet(processed_dir / f"{args.split}.parquet")
     if "transaction_id" not in df_ext.columns or "target" not in df_ext.columns:
         raise ValueError("processed split must contain transaction_id and target")
 
-    # Load node map + scaler
     node_map = load_node_map(graph_dir / "node_map.parquet")
     scaler = load_tx_scaler(graph_dir / "tx_scaler.json")
     feat_cols = scaler["feat_cols"]
 
-    # Entity columns must match A4/A5 conventions (values are prefixed by source column)
     entity_cols: Dict[str, list] = {
         "card": ["card1"],
         "email": ["P_emaildomain", "R_emaildomain"],
@@ -91,7 +86,6 @@ def main() -> None:
         "device": ["DeviceInfo", "DeviceType"],
     }
 
-    # Build inductive heterodata (transaction nodes are only external)
     data, tx_index, mapping_stats = build_inductive_heterodata(
         df_ext=df_ext,
         node_map_df=node_map,
@@ -100,7 +94,6 @@ def main() -> None:
         scaler=scaler,
     )
 
-    # Save mapping stats
     stats_path = eval_dir / f"gnn_external_mapping_{args.split}.json"
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(mapping_stats, f, ensure_ascii=False, indent=2)
@@ -124,7 +117,6 @@ def main() -> None:
     embed_dim = int(cfg_d.get("embed_dim", 64))
     batch_size_eval = int(sampler_d.get("batch_size_eval", 4096))
 
-    # Model init must match inference graph sizes
     num_nodes_by_type = {nt: int(data[nt].num_nodes) for nt in data.node_types}
 
     model = HeteroSAGE(
@@ -139,7 +131,6 @@ def main() -> None:
     _load_state_with_unk_padding(model, state)
     model.eval()
 
-    # Loader for inference over ALL external tx nodes
     idx_all = torch.arange(data["transaction"].num_nodes, dtype=torch.long)
     num_neighbors = {etype: [15, 10] for etype in data.edge_types}
 
@@ -151,26 +142,25 @@ def main() -> None:
         shuffle=False,
     )
 
-    ps = []
+    ps, ls = [], []
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(device)
             logits = model(batch.x_dict, batch.edge_index_dict)
-            bs = batch["transaction"].batch_size
-            logits = logits[:bs]  # seed nodes first
-            prob = torch.sigmoid(logits).cpu().numpy()
-            ps.append(prob)
+            bs = int(batch["transaction"].batch_size)
+            logits = logits[:bs]
+            prob = torch.sigmoid(logits)
+
+            ps.append(prob.cpu().numpy())
+            ls.append(logits.cpu().numpy())
 
     p = np.concatenate(ps).astype("float64").reshape(-1)
+    logit = np.concatenate(ls).astype("float64").reshape(-1)
 
-    # tx_index ordering is exactly tx_node_id 0..N-1
     tx_index = tx_index.sort_values("tx_node_id").reset_index(drop=True)
-
-    # Hard checks: p length must match number of external tx nodes
     if len(p) != len(tx_index):
         raise RuntimeError(f"Prediction length mismatch: p={len(p)} vs tx_index={len(tx_index)}")
 
-    # Strict 1:1 labels alignment (protect against duplicates/misalignment)
     labels = df_ext[["transaction_id", "target"]].drop_duplicates("transaction_id")
     labels["transaction_id"] = labels["transaction_id"].astype("int64")
     labels["target"] = labels["target"].astype("int8")
@@ -185,7 +175,6 @@ def main() -> None:
     # Clip probabilities for stable metrics
     p = np.clip(p, 1e-6, 1 - 1e-6)
 
-    # Diagnostics + baseline
     base_rate = float(y.mean())
     baseline_p = np.full_like(p, base_rate, dtype=np.float64)
     baseline_ll = float(binary_logloss(y, np.clip(baseline_p, 1e-6, 1 - 1e-6)))
@@ -209,6 +198,7 @@ def main() -> None:
             "tx_node_id": tx_index["tx_node_id"].astype("int64"),
             "transaction_id": tx_index["transaction_id"].astype("int64"),
             "p_gnn_external": p,
+            "logit_gnn_external": logit,
             "target": y,
         }
     )
@@ -240,7 +230,6 @@ def main() -> None:
     )
     print(f"[A9] Saved metrics: {metrics_path}")
 
-    # PR curve on external VAL only
     if args.split == "val":
         precision, recall, _ = pr_curve_points(y, p)
         pr_path = eval_dir / "pr_curve_gnn_external_val.png"
