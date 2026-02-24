@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,11 @@ def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
+def _norm(p: Path) -> str:
+    """Normalize path for reports/json (Windows -> POSIX-like)."""
+    return str(p).replace("\\", "/")
+
+
 def _read_parquet(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Missing file: {path}")
@@ -26,17 +31,49 @@ def _clip(p: np.ndarray) -> np.ndarray:
     return np.clip(p.astype(np.float64), 1e-6, 1 - 1e-6)
 
 
+def _pick_gnn_paths(eval_dir: Path) -> Tuple[Path, Path, str]:
+    """
+    Prefer calibrated external GNN preds if both exist, otherwise fallback to raw.
+    Returns: (gnn_val_path, gnn_test_path, used_gnn_tag)
+    """
+    gnn_val_cal = eval_dir / "val_pred_gnn_external_calibrated.parquet"
+    gnn_test_cal = eval_dir / "test_pred_gnn_external_calibrated.parquet"
+    gnn_val_raw = eval_dir / "val_pred_gnn_external.parquet"
+    gnn_test_raw = eval_dir / "test_pred_gnn_external.parquet"
+
+    if gnn_val_cal.exists() and gnn_test_cal.exists():
+        return gnn_val_cal, gnn_test_cal, "calibrated"
+
+    # if only one calibrated exists — считаем это неконсистентным
+    if gnn_val_cal.exists() ^ gnn_test_cal.exists():
+        raise FileNotFoundError(
+            "[A10] Inconsistent calibrated GNN preds: "
+            f"val_cal_exists={gnn_val_cal.exists()}, test_cal_exists={gnn_test_cal.exists()}. "
+            "Either generate both calibrated files or use raw for both."
+        )
+
+    # fallback raw
+    if not gnn_val_raw.exists() or not gnn_test_raw.exists():
+        raise FileNotFoundError(
+            "[A10] Missing external GNN preds. Need both:\n"
+            f" - {_norm(gnn_val_raw)}\n"
+            f" - {_norm(gnn_test_raw)}\n"
+            "Run: python -m scripts.08_predict_gnn_external --split val/test (and optionally 09_calibrate_gnn)."
+        )
+
+    return gnn_val_raw, gnn_test_raw, "raw"
+
+
 def _merge_preds_external(tab: pd.DataFrame, gnn: pd.DataFrame, split_name: str) -> pd.DataFrame:
     """
     Merge external predictions by transaction_id + target.
 
     Expected:
       tab: transaction_id, p_tabular, target
-      gnn: transaction_id, p_gnn_external_cal (preferred) OR p_gnn_external, target
+      gnn: transaction_id, p_gnn_external_cal OR p_gnn_external, target
     """
     tab = tab[["transaction_id", "p_tabular", "target"]].copy()
 
-    gnn_col = None
     if "p_gnn_external_cal" in gnn.columns:
         gnn_col = "p_gnn_external_cal"
     elif "p_gnn_external" in gnn.columns:
@@ -77,19 +114,16 @@ def main() -> None:
     _ensure_dir(fusion_dir)
 
     # -------------------------
-    # Load predictions (external)
+    # Load predictions
     # -------------------------
-    tab_val = _read_parquet(eval_dir / "val_pred_tabular.parquet")
-    tab_test = _read_parquet(eval_dir / "test_pred_tabular.parquet")
+    tab_val_path = eval_dir / "val_pred_tabular.parquet"
+    tab_test_path = eval_dir / "test_pred_tabular.parquet"
+    tab_val = _read_parquet(tab_val_path)
+    tab_test = _read_parquet(tab_test_path)
 
-    # prefer calibrated external gnn preds if available
-    gnn_val_path_cal = eval_dir / "val_pred_gnn_external_calibrated.parquet"
-    gnn_test_path_cal = eval_dir / "test_pred_gnn_external_calibrated.parquet"
-    gnn_val_path = eval_dir / "val_pred_gnn_external.parquet"
-    gnn_test_path = eval_dir / "test_pred_gnn_external.parquet"
-
-    gnn_val = _read_parquet(gnn_val_path_cal if gnn_val_path_cal.exists() else gnn_val_path)
-    gnn_test = _read_parquet(gnn_test_path_cal if gnn_test_path_cal.exists() else gnn_test_path)
+    gnn_val_path, gnn_test_path, used_gnn = _pick_gnn_paths(eval_dir)
+    gnn_val = _read_parquet(gnn_val_path)
+    gnn_test = _read_parquet(gnn_test_path)
 
     # -------------------------
     # Merge (external val/test)
@@ -139,21 +173,18 @@ def main() -> None:
     print(f"[A10] Saved model: {model_path}")
 
     # -------------------------
-    # Save metrics json
+    # Save metrics json (with audit fields)
     # -------------------------
-    # weights for interpretation
     w = fusion.model.coef_[0]
     b = fusion.model.intercept_[0]
 
     out: Dict[str, Any] = {
         "mode": "external fusion; trained on external VAL, evaluated on external TEST",
 
-        # --- Добавлено для аудита ВКР ---
+        # --- Audit fields for VKR ---
         "trained_on": "external_val",
-        "used_gnn": "calibrated" if "calibrated" in str(
-            (gnn_val_path_cal if gnn_val_path_cal.exists() else gnn_val_path)
-        ) else "raw",
-        # ---------------------------------
+        "used_gnn": used_gnn,   # "calibrated" or "raw"
+        # ----------------------------
 
         "val_external": val_metrics,
         "test_external": test_metrics,
@@ -169,10 +200,10 @@ def main() -> None:
         },
 
         "inputs": {
-            "tab_val": "artifacts/evaluation/val_pred_tabular.parquet",
-            "tab_test": "artifacts/evaluation/test_pred_tabular.parquet",
-            "gnn_val": str((gnn_val_path_cal if gnn_val_path_cal.exists() else gnn_val_path)).replace("\\", "/"),
-            "gnn_test": str((gnn_test_path_cal if gnn_test_path_cal.exists() else gnn_test_path)).replace("\\", "/"),
+            "tab_val": _norm(tab_val_path),
+            "tab_test": _norm(tab_test_path),
+            "gnn_val": _norm(gnn_val_path),
+            "gnn_test": _norm(gnn_test_path),
         },
     }
 
