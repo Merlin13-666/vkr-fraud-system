@@ -38,14 +38,14 @@
           <div class="grid">
             <div>
               <b>TEST</b><br/>
-              logloss: <code class="ok">0.089308</code><br/>
-              PR-AUC: <code class="ok">0.518383</code><br/>
-              ROC-AUC: <code class="ok">0.905084</code>
+              logloss: <code class="ok">0.089611</code><br/>
+              PR-AUC: <code class="ok">0.517021</code><br/>
+              ROC-AUC: <code class="ok">0.903330</code>
             </div>
             <div>
               <b>Thresholds</b><br/>
-              t_review: <code>0.048122</code><br/>
-              t_deny: <code>0.275912</code><br/>
+              t_review: <code>0.048066</code><br/>
+              t_deny: <code>0.275694</code><br/>
               <span class="muted small">
                 constraints: max_fpr_deny=0.01 | max_review_share=0.1
               </span>
@@ -79,12 +79,12 @@
     <tr>
       <td>fusion_external</td>
       <td>Fusion (external honest, trained on external VAL, tested on external TEST)</td>
-      <td>0.095325</td>
-      <td>0.589844</td>
-      <td>0.910814</td>
-      <td>0.089308</td>
-      <td>0.518383</td>
-      <td>0.905084</td>
+      <td>0.095330</td>
+      <td>0.589802</td>
+      <td>0.910829</td>
+      <td>0.089611</td>
+      <td>0.517021</td>
+      <td>0.903330</td>
     </tr>
     <tr>
       <td>fusion_internal</td>
@@ -119,12 +119,12 @@
     <tr>
       <td>gnn_external</td>
       <td>GNN (external inductive, future split)</td>
-      <td>0.252498</td>
-      <td>0.219290</td>
-      <td>0.751215</td>
-      <td>0.243932</td>
-      <td>0.191268</td>
-      <td>0.707826</td>
+      <td>0.252821</td>
+      <td>0.219409</td>
+      <td>0.751259</td>
+      <td>0.248088</td>
+      <td>0.190163</td>
+      <td>0.701042</td>
     </tr>
   </tbody>
 </table>
@@ -142,15 +142,15 @@
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.095325</code><br/>
-                  PR-AUC: <code>0.589844</code><br/>
-                  ROC-AUC: <code>0.910814</code>
+                  logloss: <code>0.095330</code><br/>
+                  PR-AUC: <code>0.589802</code><br/>
+                  ROC-AUC: <code>0.910829</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.089308</code><br/>
-                  PR-AUC: <code>0.518383</code><br/>
-                  ROC-AUC: <code>0.905084</code>
+                  logloss: <code>0.089611</code><br/>
+                  PR-AUC: <code>0.517021</code><br/>
+                  ROC-AUC: <code>0.903330</code>
                 </div>
               </div>
             </div>
@@ -234,15 +234,15 @@
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.252498</code><br/>
-                  PR-AUC: <code>0.219290</code><br/>
-                  ROC-AUC: <code>0.751215</code>
+                  logloss: <code>0.252821</code><br/>
+                  PR-AUC: <code>0.219409</code><br/>
+                  ROC-AUC: <code>0.751259</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.243932</code><br/>
-                  PR-AUC: <code>0.191268</code><br/>
-                  ROC-AUC: <code>0.707826</code>
+                  logloss: <code>0.248088</code><br/>
+                  PR-AUC: <code>0.190163</code><br/>
+                  ROC-AUC: <code>0.701042</code>
                 </div>
               </div>
             </div>
@@ -269,8 +269,8 @@
         
         <div class='card'>
           <h3>FUSION_EXTERNAL thresholds</h3>
-          <div>t_review: <code>0.048122</code></div>
-          <div>t_deny: <code>0.275912</code></div>
+          <div>t_review: <code>0.048066</code></div>
+          <div>t_deny: <code>0.275694</code></div>
           <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
           <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
         </div>
@@ -385,27 +385,27 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>90755</td>
-      <td>0.873896</td>
-      <td>0.010875</td>
-      <td>0.000189</td>
-      <td>0.048121</td>
+      <td>90754</td>
+      <td>0.873887</td>
+      <td>0.010865</td>
+      <td>0.000190</td>
+      <td>0.048066</td>
     </tr>
     <tr>
       <td>review</td>
       <td>10084</td>
       <td>0.097101</td>
       <td>0.110869</td>
-      <td>0.048123</td>
-      <td>0.275893</td>
+      <td>0.048066</td>
+      <td>0.275506</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>3012</td>
-      <td>0.029003</td>
-      <td>0.668991</td>
-      <td>0.275912</td>
-      <td>0.999507</td>
+      <td>3013</td>
+      <td>0.029013</td>
+      <td>0.669101</td>
+      <td>0.275694</td>
+      <td>0.999505</td>
     </tr>
   </tbody>
 </table>
@@ -429,27 +429,27 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>92663</td>
-      <td>0.892260</td>
-      <td>0.010554</td>
+      <td>92755</td>
+      <td>0.893146</td>
+      <td>0.010619</td>
       <td>0.000164</td>
-      <td>0.048108</td>
+      <td>0.048053</td>
     </tr>
     <tr>
       <td>review</td>
-      <td>8806</td>
-      <td>0.084794</td>
-      <td>0.116739</td>
-      <td>0.048124</td>
-      <td>0.275558</td>
+      <td>8712</td>
+      <td>0.083889</td>
+      <td>0.116621</td>
+      <td>0.048071</td>
+      <td>0.275167</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>2383</td>
-      <td>0.022946</td>
-      <td>0.604700</td>
-      <td>0.276139</td>
-      <td>0.999042</td>
+      <td>2385</td>
+      <td>0.022965</td>
+      <td>0.606289</td>
+      <td>0.275830</td>
+      <td>0.999035</td>
     </tr>
   </tbody>
 </table>
@@ -478,10 +478,157 @@
         <div class='card'>
           <h3>FUSION_EXTERNAL cost (TEST)</h3>
           <div class='muted small'>source: <a href="artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
-          <div>avg_cost_per_tx: <code>2.506567</code></div>
-          <div>total_cost: <code>260312.000</code></div>
+          <div>avg_cost_per_tx: <code>2.516793</code></div>
+          <div>total_cost: <code>261374.000</code></div>
         </div>
         </div>
+
+        <h2>Интерпретация (SHAP, табличная модель)</h2>
+<div class='muted'>Глобальная важность признаков и их вклад в решение модели LightGBM. Для batch-predict доступна опция <code>--with-reasons</code>, которая добавляет <code>top_reasons</code> (top-k вкладов SHAP на транзакцию).</div>
+<div class='grid'>
+<div class='card'><h3>SHAP summary (bar)</h3><img src='assets/shap_summary_bar.png' /></div>
+<div class='card'><h3>SHAP summary (beeswarm)</h3><img src='assets/shap_summary_beeswarm.png' /></div>
+</div>
+<div class='card'>
+<h3>Top features (mean |SHAP|)</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>feature</th>
+      <th>mean_abs_shap</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>TransactionAmt</td>
+      <td>0.237452</td>
+    </tr>
+    <tr>
+      <td>C13</td>
+      <td>0.170128</td>
+    </tr>
+    <tr>
+      <td>V70</td>
+      <td>0.167206</td>
+    </tr>
+    <tr>
+      <td>ProductCD_R</td>
+      <td>0.109534</td>
+    </tr>
+    <tr>
+      <td>card6_debit</td>
+      <td>0.109345</td>
+    </tr>
+    <tr>
+      <td>M4___MISSING__</td>
+      <td>0.105844</td>
+    </tr>
+    <tr>
+      <td>C11</td>
+      <td>0.105074</td>
+    </tr>
+    <tr>
+      <td>C1</td>
+      <td>0.102234</td>
+    </tr>
+    <tr>
+      <td>C14</td>
+      <td>0.086155</td>
+    </tr>
+    <tr>
+      <td>D4</td>
+      <td>0.082131</td>
+    </tr>
+    <tr>
+      <td>card1</td>
+      <td>0.079400</td>
+    </tr>
+    <tr>
+      <td>card2</td>
+      <td>0.073967</td>
+    </tr>
+    <tr>
+      <td>D2</td>
+      <td>0.064663</td>
+    </tr>
+    <tr>
+      <td>addr1</td>
+      <td>0.064528</td>
+    </tr>
+    <tr>
+      <td>M3_T</td>
+      <td>0.062805</td>
+    </tr>
+    <tr>
+      <td>D1</td>
+      <td>0.059985</td>
+    </tr>
+    <tr>
+      <td>card5</td>
+      <td>0.058596</td>
+    </tr>
+    <tr>
+      <td>V294</td>
+      <td>0.054955</td>
+    </tr>
+    <tr>
+      <td>V91</td>
+      <td>0.054273</td>
+    </tr>
+    <tr>
+      <td>M5_T</td>
+      <td>0.053886</td>
+    </tr>
+    <tr>
+      <td>V258</td>
+      <td>0.052766</td>
+    </tr>
+    <tr>
+      <td>P_emaildomain_gmail.com</td>
+      <td>0.051580</td>
+    </tr>
+    <tr>
+      <td>V49</td>
+      <td>0.050745</td>
+    </tr>
+    <tr>
+      <td>V165</td>
+      <td>0.049315</td>
+    </tr>
+    <tr>
+      <td>D3</td>
+      <td>0.046358</td>
+    </tr>
+    <tr>
+      <td>C6</td>
+      <td>0.045336</td>
+    </tr>
+    <tr>
+      <td>D15</td>
+      <td>0.043639</td>
+    </tr>
+    <tr>
+      <td>card6_credit</td>
+      <td>0.042039</td>
+    </tr>
+    <tr>
+      <td>V317</td>
+      <td>0.041332</td>
+    </tr>
+    <tr>
+      <td>D8</td>
+      <td>0.040855</td>
+    </tr>
+  </tbody>
+</table>
+<div class='muted small'>source: <a href="reports/tables/shap_top_features.csv">shap_top_features.csv</a></div>
+<div class='muted small'>meta: <a href="reports/tables/shap_meta.json">shap_meta.json</a></div>
+</div>
+<div class='card'>
+<h3>Пример output с причинами</h3>
+<div class='muted'>Файл содержит колонку <code>top_reasons</code> — JSON-массив из top-k признаков с их значениями и вкладом SHAP (положительный → повышает риск, отрицательный → снижает).</div>
+<div class='muted small'>example: <a href="artifacts/predict/test_tabular_with_reasons.parquet">test_tabular_with_reasons.parquet</a></div>
+</div>
 
         <h2>Notes for РПЗ</h2>
         <div class="card">
