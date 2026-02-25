@@ -2,102 +2,58 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
-ModelName = Literal["tabular", "fusion_external"]
-InputFormat = Literal["rows", "canonical"]
-
+# --- INPUT ---
 
 class PredictOptions(BaseModel):
-    model: ModelName = Field(default="tabular", description="Какую модель использовать.")
-    input_format: InputFormat = Field(
-        default="rows",
-        description=(
-            "Формат входа.\n"
-            "- rows: короткая форма (просто список объектов с фичами)\n"
-            "- canonical: полная форма (transactions[{transaction_id, features}])"
-        ),
-    )
-    with_reasons: bool = Field(
-        default=False,
-        description="Пытаться вернуть объяснения (top_reasons). Если выключено — top_reasons будет null.",
-    )
-    reasons_topk: int = Field(default=5, ge=1, le=50, description="Сколько top причин вернуть (если включено).")
-    reasons_max_rows: int = Field(default=30000, ge=1, le=200000, description="Лимит строк для explainability.")
+    model: str = Field(default="tabular", description="Какую модель использовать (пока доступна tabular).")
+    input_format: Literal["canonical"] = Field(default="canonical", description="Формат input (для канонического запроса).")
+    with_reasons: bool = Field(default=False, description="Вернуть top_reasons (вклады признаков).")
+    reasons_topk: int = Field(default=5, ge=1, le=50, description="Сколько причин вернуть (top-k).")
 
 
 class CanonicalTransaction(BaseModel):
-    transaction_id: str = Field(..., description="ID транзакции в ответе (любая строка).", examples=["tx_1"])
-    features: Dict[str, Any] = Field(
-        ...,
-        description="Словарь фич. Можно присылать не все — недостающие будут добавлены автоматически как пустые.",
-        examples=[{"TransactionAmt": 100.0, "ProductCD": "W"}],
-    )
+    transaction_id: str = Field(..., description="Идентификатор транзакции (ваш).")
+    features: Dict[str, Any] = Field(..., description="Словарь фич (можно присылать частично).")
 
 
-class PredictRequest(BaseModel):
-    """
-    Единый запрос, который умеет принимать ДВА варианта:
-
-    1) rows (короткий):
-        { "rows": [ { ...features... }, { ... } ] }
-
-    2) canonical (полный):
-        {
-          "options": {...},
-          "transactions": [
-            { "transaction_id": "...", "features": {...} }
-          ]
-        }
-    """
-
-    # short form
-    rows: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Короткий формат. Список объектов-фич.",
-        examples=[[{"TransactionAmt": 100.0, "ProductCD": "W"}]],
-    )
-
-    # canonical form
+class PredictRequestCanonical(BaseModel):
     options: PredictOptions = Field(default_factory=PredictOptions)
-    transactions: Optional[List[CanonicalTransaction]] = Field(
-        default=None,
-        description="Полный формат. Список транзакций (transaction_id + features).",
-    )
-
-    @model_validator(mode="after")
-    def _validate_payload(self) -> "PredictRequest":
-        # Разрешаем:
-        # - либо rows
-        # - либо transactions
-        if self.rows is None and (self.transactions is None or len(self.transactions) == 0):
-            raise ValueError('Send either "rows" or "transactions".')
-        if self.rows is not None and self.transactions is not None:
-            raise ValueError('Send only one of: "rows" OR "transactions", not both.')
-        return self
+    transactions: List[CanonicalTransaction]
 
 
-class TopReason(BaseModel):
-    feature: str
-    contribution: float = Field(description="Относительный вклад (пока эвристика/заглушка).")
+class PredictRequestRows(BaseModel):
+    rows: List[Dict[str, Any]] = Field(..., description="Список строк-фич. transaction_id будет row_1, row_2, ...")
+
+
+# --- OUTPUT ---
+
+class ReasonItem(BaseModel):
+    feature: str = Field(..., description="Название признака.")
+    contribution: float = Field(..., description="Вклад признака в скор (приближенно, по contrib).")
+    value: Optional[Any] = Field(default=None, description="Значение признака в запросе (если было).")
 
 
 class PredictItem(BaseModel):
     transaction_id: str
-    risk_score: float = Field(description="Вероятность мошенничества (0..1).")
-    decision: Literal["allow", "review", "deny"] = Field(description="Решение по порогам.")
-    top_reasons: Optional[List[TopReason]] = Field(default=None, description="Объяснения (если включено).")
+    risk_score: float = Field(..., ge=0.0, le=1.0, description="Вероятность fraud (от 0 до 1).")
+    decision: Literal["allow", "review", "deny"] = Field(..., description="Решение по порогам.")
+    top_reasons: Optional[List[ReasonItem]] = Field(default=None, description="Причины (если запрошены).")
 
 
 class PredictResponse(BaseModel):
-    model: ModelName
-    input_format: InputFormat
+    model: str
+    input_format: str
     items: List[PredictItem]
     request_id: str
 
 
-class ReloadResponse(BaseModel):
-    status: str
-    reloaded: bool
-    artifacts: Dict[str, Any]
+class ReadyResponse(BaseModel):
+    ready: bool
+    model_path: str
+    thresholds_path: str
+    feature_spec_path: str
+    default_model: str
+    error: Optional[str] = None

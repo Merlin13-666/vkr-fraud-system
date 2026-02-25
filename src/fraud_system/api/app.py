@@ -1,171 +1,279 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import PlainTextResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+import uuid
+from typing import Any, Dict, List
 
-from .errors import unhandled_exception_handler
-from .middleware import RequestIdMiddleware, TimingMiddleware
-from .schemas import PredictRequest, PredictResponse, ReloadResponse
-from .security import require_api_key
-from .service import FraudService
-from .settings import ApiSettings, BuildInfo
+from fastapi import Depends, FastAPI, Body, Request
+from fastapi.responses import JSONResponse
+
+from fraud_system.api.errors import install_error_handlers, http_400, http_503
+from fraud_system.api.metrics import Metrics
+from fraud_system.api.middleware import MetricsMiddleware, RequestIdMiddleware
+from fraud_system.api.schemas import (
+    PredictRequestCanonical,
+    PredictRequestRows,
+    PredictResponse,
+    PredictItem,
+    ReasonItem,
+    ReadyResponse,
+)
+from fraud_system.api.security import build_api_key_scheme, require_api_key
+from fraud_system.api.service import FraudService
+from fraud_system.api.settings import ApiSettings
 
 
-def create_app(settings: ApiSettings | None = None) -> FastAPI:
-    settings = settings or ApiSettings.from_env()
-    build = BuildInfo()
+def _docs_ru(settings: ApiSettings) -> str:
+    hdr = settings.api_key_header
+    auth_state = "ВКЛЮЧЕНА ✅" if settings.auth_enabled() else "ОТКЛЮЧЕНА ✅ (ключ пустой или change-me)"
 
-    tags = [
-        {
-            "name": "Сервис",
-            "description": (
-                "Проверка работоспособности сервиса, readiness и метрики.\n\n"
-                "**/docs** — это интерактивная документация Swagger: можно прямо там отправлять запросы."
-            ),
-        },
-        {
-            "name": "Скоринг",
-            "description": (
-                "Скоринг транзакций.\n\n"
-                "Поддерживаются два формата входа:\n"
-                "1) **rows** (короткий): `{ \"rows\": [ { ...features... } ] }`\n"
-                "2) **canonical** (полный): `{ \"options\": {...}, \"transactions\": [ {\"transaction_id\":..., \"features\": {...}} ] }`\n\n"
-                "⚠️ Можно присылать не все фичи — недостающие будут добавлены как пустые (NaN), "
-                "чтобы модель (ColumnTransformer) не падала."
-            ),
-        },
-        {
-            "name": "Администрирование",
-            "description": "Перезагрузка артефактов (модель/пороги/feature_spec) без рестарта.",
-        },
+    return f"""
+## VKR Fraud API — демо API для ВКР (антифрод скоринг)
+
+### Что делает сервис
+Сервис принимает транзакции (набор признаков) и возвращает:
+- **risk_score** — вероятность мошенничества (0..1)
+- **decision** — решение по порогам: `allow / review / deny`
+- **top_reasons** — (опционально) причины / вклады признаков для top-k
+
+---
+
+## Авторизация
+Текущее состояние: **{auth_state}**
+
+Если включена авторизация — **каждый запрос** к `POST /predict` требует заголовок:
+
+- `{hdr}: <ваш_ключ>`
+
+Пример в PowerShell:
+```powershell
+-Headers @{{ "{hdr}" = "super-secret" }}
+```
+---
+## Форматы входа: rows vs canonical
+### 1) rows (короткий формат)
+
+Когда нужно “быстро закинуть фичи”.
+transaction_id создаётся автоматически: row_1, row_2, ...
+```json
+{{
+  "rows": [
+    {{"TransactionAmt": 100.0, "ProductCD": "W"}}
+  ]
+}}
+```
+### 2) canonical (расширенный формат)
+
+Когда нужен свой transaction_id и нужно управлять options.
+```json
+{{
+  "options": {{
+    "model": "tabular",
+    "input_format": "canonical",
+    "with_reasons": true,
+    "reasons_topk": 5
+  }},
+  "transactions": [
+    {{
+      "transaction_id": "tx_1",
+      "features": {{"TransactionAmt": 100.0, "ProductCD": "W"}}
+    }}
+  ]
+}}
+```
+---
+### Что такое decision
+
+decision вычисляется по порогам из thresholds_tabular.json:
+- risk_score >= deny → deny
+- risk_score >= review → review
+- иначе → allow
+---
+### Что такое top_reasons
+
+Это быстрые вклады признаков через LightGBM pred_contrib=True (это не SHAP-графики).
+Возвращаем top-k по модулю вклада.
+
+Ограничение безопасности: если строк слишком много — reasons могут быть отключены.
+"""
+
+def _legend_for_feature(name: str) -> str:
+# Короткая “расшифровка”, чтобы /docs выглядел человечно
+    if name == "TransactionAmt":
+        return "Сумма транзакции"
+    if name == "ProductCD":
+        return "Код продукта/типа операции"
+    if name.startswith("card"):
+        return "Атрибуты карты/банка/категории"
+    if name.startswith("addr"):
+        return "Адресные признаки"
+    if name.startswith("dist"):
+        return "Дистанционные признаки"
+    if name.startswith("C"):
+        return "Счётчики/агрегаты поведения (C*)"
+    if name.startswith("D"):
+        return "Временные дельты/интервалы (D*)"
+    if name.startswith("M"):
+        return "Match/флаги совпадений (M*)"
+    if name.startswith("V"):
+        return "Сгенерированные Vesta признаки (V*)"
+    if name.startswith("id"):
+        return "Identity признаки устройства/браузера (id_*)"
+    if name in {"DeviceType", "DeviceInfo"}:
+        return "Тип/информация об устройстве"
+    if name in {"P_emaildomain", "R_emaildomain"}:
+        return "Домены email покупателя/получателя"
+    return "Признак (см. датасет/feature_spec)"
+
+def create_app(settings: ApiSettings) -> FastAPI:
+    tags_metadata = [
+        {"name": "Service", "description": "Технические эндпоинты (health/ready)."},
+        {"name": "Prediction", "description": "Скоринг транзакций и решение allow/review/deny."},
+        {"name": "Ops", "description": "Метрики и сервисные операции."},
     ]
-
     app = FastAPI(
-        title="VKR Fraud System API",
-        version=build.version,
-        description=(
-            "API для скоринга банковских транзакций (табличная модель).\n\n"
-            "## Авторизация\n"
-            "Используется заголовок **X-API-Key**.\n\n"
-            "### Пример (PowerShell)\n"
-            "```powershell\n"
-            "$env:FRAUD_API_API_KEY=\"super-secret\"\n"
-            "python -m scripts.13_serve_api\n"
-            "\n"
-            "$payload = @{ rows = @(@{ TransactionAmt = 100.0; ProductCD = \"W\" }) } | ConvertTo-Json -Depth 10\n"
-            "Invoke-RestMethod -Uri \"http://127.0.0.1:8000/predict\" -Method Post -ContentType \"application/json\" "
-            "-Headers @{ \"X-API-Key\" = \"super-secret\" } -Body $payload\n"
-            "```\n\n"
-            "## rows vs canonical\n"
-            "- **rows** — быстрее и проще (только фичи, transaction_id генерируется автоматически)\n"
-            "- **canonical** — полный контроль над transaction_id + options\n"
-        ),
-        openapi_tags=tags,
+        title=settings.service_name,
+        version="1.0",
+        description=_docs_ru(settings),
+        openapi_tags=tags_metadata,
     )
+
+    install_error_handlers(app)
+
+    metrics = Metrics(enabled=settings.enable_metrics)
+    svc = FraudService(settings=settings)
+    svc.reload()
 
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(TimingMiddleware)
-    app.add_exception_handler(Exception, unhandled_exception_handler)
+    if settings.enable_metrics:
+        app.add_middleware(MetricsMiddleware, metrics=metrics)
 
-    svc = FraudService(
-        tabular_model_path=settings.tabular_model_path,
-        fusion_model_path=settings.fusion_model_path,
-        thresholds_tabular_path=settings.thresholds_tabular_path,
-        thresholds_fusion_external_path=settings.thresholds_fusion_external_path,
-        feature_spec_path=settings.feature_spec_path,
-        enable_reasons=settings.enable_reasons,
-    )
+    api_key_scheme = build_api_key_scheme(settings)
 
-    @app.get("/", tags=["Сервис"])
-    def index():
+    def _auth_dep(api_key: str | None = Depends(api_key_scheme)) -> None:
+        require_api_key(settings, api_key)
+
+    @app.get("/", tags=["Service"])
+    def root():
+        return {"service": settings.service_name, "docs": "/docs", "health": "/health"}
+
+    @app.get("/health", tags=["Service"])
+    def health():
+        return {"status": "ok"}
+
+    @app.get("/ready", response_model=ReadyResponse, tags=["Service"])
+    def ready():
         return {
-            "service": build.service,
-            "version": build.version,
-            "docs": "/docs",
-            "health": "/health",
-            "ready": "/ready",
-            "metrics": "/metrics",
+            "ready": svc.is_ready(),
+            "model_path": settings.tabular_model_path,
+            "thresholds_path": settings.thresholds_path,
+            "feature_spec_path": settings.feature_spec_path,
+            "default_model": settings.default_model,
+            "error": svc.last_error,
         }
 
-    @app.get("/health", tags=["Сервис"])
-    def health():
-        return {"status": "ok", "service": build.service, "version": build.version}
+    @app.get("/metrics", tags=["Ops"])
+    def metrics_endpoint():
+        return metrics.endpoint()
 
-    @app.get("/ready", tags=["Сервис"])
-    def ready():
-        return {"ready": True, "artifacts": svc.paths}
+    @app.post(
+        "/reload",
+        tags=["Ops"],
+        dependencies=[Depends(_auth_dep)],
+        summary="Перезагрузить артефакты (модель/пороги/spec) без рестарта",
+    )
+    def reload_endpoint():
+        svc.reload()
+        if not svc.is_ready():
+            raise http_503(f"Reload failed: {svc.last_error}")
+        return {"ok": True}
 
-    @app.get("/metrics", tags=["Сервис"])
-    def metrics() -> PlainTextResponse:
-        data = generate_latest()
-        return PlainTextResponse(content=data.decode("utf-8"), media_type=CONTENT_TYPE_LATEST)
+    @app.get("/features", tags=["Ops"], summary="Список признаков и их группы (num/cat) + легенда")
+    def features():
+        if not svc.is_ready():
+            raise http_503("Service not ready. Call /ready")
+        info = svc.features_info()
+        # добавим легенду
+        expected = info.get("expected_columns", [])
+        legend = {c: _legend_for_feature(c) for c in expected}
+        info["legend"] = legend
+        return info
+
+    @app.get("/examples", tags=["Ops"], summary="Готовые примеры запросов и PowerShell-команды")
+    def examples():
+        hdr = settings.api_key_header
+        return {
+            "powershell_rows": [
+                '$payload = @{ rows = @(@{ TransactionAmt = 100.0; ProductCD = "W" }) } | ConvertTo-Json -Depth 10',
+                f'Invoke-RestMethod -Uri "http://{settings.host}:{settings.port}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+            ],
+            "powershell_canonical": [
+                '$payload = @{ options = @{ model="tabular"; input_format="canonical"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
+                f'Invoke-RestMethod -Uri "http://{settings.host}:{settings.port}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+            ],
+        }
 
     @app.post(
         "/predict",
         response_model=PredictResponse,
-        tags=["Скоринг"],
-        dependencies=[Depends(require_api_key)],
-        summary="Скоринг транзакций (rows или canonical)",
-        description=(
-            "### Вариант 1: rows\n"
-            "```json\n"
-            "{\n"
-            "  \"rows\": [\n"
-            "    {\"TransactionAmt\": 100.0, \"ProductCD\": \"W\"}\n"
-            "  ]\n"
-            "}\n"
-            "```\n\n"
-            "### Вариант 2: canonical\n"
-            "```json\n"
-            "{\n"
-            "  \"options\": {\"model\":\"tabular\",\"input_format\":\"canonical\",\"with_reasons\":false,\"reasons_topk\":5},\n"
-            "  \"transactions\": [\n"
-            "    {\"transaction_id\":\"tx_1\",\"features\":{\"TransactionAmt\":100.0,\"ProductCD\":\"W\"}}\n"
-            "  ]\n"
-            "}\n"
-            "```\n\n"
-            "⚠️ Если прислали мало фич — сервис сам добавит недостающие как пустые значения, "
-            "чтобы модель не падала."
-        ),
+        tags=["Prediction"],
+        dependencies=[Depends(_auth_dep)],
+        summary="Скоринг транзакций (tabular). Поддерживает rows и canonical.",
     )
-    def predict(req: PredictRequest, request: Request):
-        rid = request.state.request_id
+    def predict(
+            request: Request,
+            payload: Dict[str, Any] = Body(
+                ...,
+                description="Тело запроса (rows или canonical). См. описание выше и /examples.",
+            ),
+    ):
+        if not svc.is_ready():
+            raise http_503("Service not ready. Call /ready")
 
-        # Нормализуем rows/canonical в единый records
-        if req.rows is not None:
-            records = [
-                {"transaction_id": f"row_{i+1}", "features": row}
-                for i, row in enumerate(req.rows)
-            ]
+        rid = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+
+        # Определяем формат по ключам
+        if "rows" in payload:
+            req = PredictRequestRows(**payload)
             input_format = "rows"
-        else:
-            records = [{"transaction_id": t.transaction_id, "features": t.features} for t in (req.transactions or [])]
+            rows = req.rows
+            tx_ids = [f"row_{i + 1}" for i in range(len(rows))]
+            with_reasons = False
+            reasons_topk = settings.reasons_topk_default
+        elif "transactions" in payload:
+            req = PredictRequestCanonical(**payload)
             input_format = "canonical"
+            with_reasons = req.options.with_reasons
+            reasons_topk = req.options.reasons_topk or settings.reasons_topk_default
+            tx_ids = [t.transaction_id for t in req.transactions]
+            rows = [t.features for t in req.transactions]
+        else:
+            raise http_400("Неверный формат тела. Нужно либо {'rows':[...]} либо {'options':..., 'transactions':[...]}")
 
-        out = svc.predict(
-            model=req.options.model,
-            records=records,
-            with_reasons=req.options.with_reasons,
-            reasons_topk=req.options.reasons_topk,
-            reasons_max_rows=req.options.reasons_max_rows,
+        items_raw, model_name = svc.predict_tabular(
+            rows=rows,
+            with_reasons=with_reasons,
+            reasons_topk=reasons_topk,
         )
 
-        # Проставим корректные поля ответа
-        out["request_id"] = rid
-        out["input_format"] = input_format
-        return out
+        items: List[PredictItem] = []
+        for i, it in enumerate(items_raw):
+            reasons = None
+            if it.get("top_reasons") is not None:
+                reasons = [ReasonItem(**r) for r in it["top_reasons"]]
+            items.append(
+                PredictItem(
+                    transaction_id=tx_ids[i],
+                    risk_score=it["risk_score"],
+                    decision=it["decision"],
+                    top_reasons=reasons,
+                )
+            )
 
-    @app.post(
-        "/reload",
-        response_model=ReloadResponse,
-        tags=["Администрирование"],
-        dependencies=[Depends(require_api_key)],
-        summary="Перезагрузить артефакты (модель/пороги/spec) без рестарта",
-    )
-    def reload_artifacts(request: Request):
-        rid = request.state.request_id
-        svc.reload()
-        return {"status": "ok", "reloaded": True, "artifacts": {**svc.paths, "request_id": rid}}
+        return PredictResponse(
+            model=model_name,
+            input_format=input_format,
+            items=items,
+            request_id=rid,
+        )
 
     return app

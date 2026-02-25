@@ -5,7 +5,7 @@ from fraud_system.api.settings import ApiSettings
 
 
 def main():
-    # Берём всё из env (включая FRAUD_API_API_KEY)
+    # весь конфиг берём из env (включая FRAUD_API_API_KEY)
     settings = ApiSettings.from_env()
     app = create_app(settings)
 

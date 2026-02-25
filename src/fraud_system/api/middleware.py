@@ -2,31 +2,35 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import Callable
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from fraud_system.api.metrics import Metrics
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """
-    Проставляет X-Request-ID на каждый ответ.
-    Если клиент прислал свой X-Request-ID — используем его.
-    """
-
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
         rid = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = rid
-        response: Response = await call_next(request)
+        response = await call_next(request)
         response.headers["X-Request-ID"] = rid
         return response
 
 
-class TimingMiddleware(BaseHTTPMiddleware):
-    """Добавляет X-Response-Time-ms (полезно для дебага)."""
+class MetricsMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, metrics: Metrics):
+        super().__init__(app)
+        self.metrics = metrics
 
-    async def dispatch(self, request: Request, call_next):
-        t0 = time.time()
-        response: Response = await call_next(request)
-        dt_ms = int((time.time() - t0) * 1000)
-        response.headers["X-Response-Time-ms"] = str(dt_ms)
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        start = time.perf_counter()
+        response = await call_next(request)
+        seconds = time.perf_counter() - start
+
+        # группируем по “роуту” аккуратно: берём path без query-string
+        path = request.url.path
+        self.metrics.observe(request.method, path, response.status_code, seconds)
         return response
