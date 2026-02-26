@@ -16,11 +16,18 @@ class ApiSettings:
     api_key: str = "change-me"
     api_key_header: str = "X-API-Key"
 
-    # artifacts
+    # artifacts: tabular
     tabular_model_path: str = "artifacts/tabular/model.pkl"
-    thresholds_path: str = "artifacts/thresholds/thresholds_tabular.json"
+    thresholds_tabular_path: str = "artifacts/thresholds/thresholds_tabular.json"
     feature_spec_path: str = "artifacts/evaluation/tabular_feature_spec.json"
-    default_model: str = "tabular"
+
+    # artifacts: fusion external (main “system mode”)
+    fusion_external_model_path: str = "artifacts/fusion/fusion_external.pkl"
+    thresholds_fusion_external_path: str = "artifacts/thresholds/thresholds_fusion_external.json"
+    fusion_external_metrics_path: str = "artifacts/evaluation/fusion_metrics_external.json"
+
+    # defaults
+    default_model: str = "tabular"  # or "fusion_external"
 
     # reasons
     enable_reasons: bool = True
@@ -54,10 +61,17 @@ class ApiSettings:
             log_level=os.getenv("FRAUD_API_LOG_LEVEL", cls.log_level),
             api_key=os.getenv("FRAUD_API_API_KEY", cls.api_key),
             api_key_header=os.getenv("FRAUD_API_API_KEY_HEADER", cls.api_key_header),
+
             tabular_model_path=os.getenv("FRAUD_API_TABULAR_MODEL_PATH", cls.tabular_model_path),
-            thresholds_path=os.getenv("FRAUD_API_THRESHOLDS_PATH", cls.thresholds_path),
+            thresholds_tabular_path=os.getenv("FRAUD_API_THRESHOLDS_TABULAR_PATH", cls.thresholds_tabular_path),
             feature_spec_path=os.getenv("FRAUD_API_FEATURE_SPEC_PATH", cls.feature_spec_path),
+
+            fusion_external_model_path=os.getenv("FRAUD_API_FUSION_EXTERNAL_MODEL_PATH", cls.fusion_external_model_path),
+            thresholds_fusion_external_path=os.getenv("FRAUD_API_THRESHOLDS_FUSION_EXTERNAL_PATH", cls.thresholds_fusion_external_path),
+            fusion_external_metrics_path=os.getenv("FRAUD_API_FUSION_EXTERNAL_METRICS_PATH", cls.fusion_external_metrics_path),
+
             default_model=os.getenv("FRAUD_API_DEFAULT_MODEL", cls.default_model),
+
             enable_reasons=_get_bool("FRAUD_API_ENABLE_REASONS", cls.enable_reasons),
             reasons_topk_default=_get_int("FRAUD_API_REASONS_TOPK_DEFAULT", cls.reasons_topk_default),
             reasons_max_rows=_get_int("FRAUD_API_REASONS_MAX_ROWS", cls.reasons_max_rows),

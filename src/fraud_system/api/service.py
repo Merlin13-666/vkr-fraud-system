@@ -95,6 +95,12 @@ def _load_thresholds(path: str) -> Dict[str, float]:
         if isinstance(v, (int, float)):
             out[k] = float(v)
 
+    # нормализуем к deny/review
+    if "deny" not in out and "t_deny" in out:
+        out["deny"] = out["t_deny"]
+    if "review" not in out and "t_review" in out:
+        out["review"] = out["t_review"]
+
     out.setdefault("review", 0.7)
     out.setdefault("deny", 0.9)
     return out
@@ -157,6 +163,20 @@ def _try_contrib(estimator: Any, X: pd.DataFrame) -> Optional[np.ndarray]:
         return None
     return None
 
+def _sigmoid(z: np.ndarray) -> np.ndarray:
+    z = np.clip(z, -50.0, 50.0)
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def _logit(p: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    p = np.clip(p, eps, 1.0 - eps)
+    return np.log(p / (1.0 - p))
+
+@dataclass
+class FusionWeights:
+    w_tabular: float
+    w_gnn: float
+    bias: float
 
 @dataclass
 class LoadedArtifacts:
@@ -167,6 +187,11 @@ class LoadedArtifacts:
     preprocessor: Any = None
     estimator: Any = None
     transformed_feature_names: Optional[List[str]] = None
+    # fusion external
+    fusion_external_model: Any = None  # may be sklearn LogisticRegression-wrapped or custom
+    fusion_external_thresholds: Optional[Dict[str, float]] = None
+    fusion_external_weights: Optional[FusionWeights] = None
+    fusion_external_meta: Optional[Dict[str, Any]] = None
 
 
 class FraudService:
@@ -193,9 +218,10 @@ class FraudService:
         Важно: не роняем процесс при проблемах — сохраняем ошибку в last_error.
         """
         try:
+            # --- tabular ---
             model = _load_model_any(self.settings.tabular_model_path)
             feature_spec = _read_json(self.settings.feature_spec_path)
-            thresholds = _load_thresholds(self.settings.thresholds_path)
+            thresholds_tab = _load_thresholds(self.settings.thresholds_tabular_path)
 
             cols = _extract_columns_from_feature_spec(feature_spec)
             if not cols:
@@ -215,65 +241,91 @@ class FraudService:
                 except Exception:
                     feat_names = None
 
+            # --- fusion external (optional) ---
+            fusion_model = None
+            fusion_thr = None
+            fusion_w = None
+            fusion_meta = None
+            # thresholds for fusion
+            fusion_thr = _load_thresholds(self.settings.thresholds_fusion_external_path)
+
+            # try load pkl
+            try:
+                if Path(self.settings.fusion_external_model_path).exists():
+                    fusion_model = _load_model_any(self.settings.fusion_external_model_path)
+            except Exception:
+                fusion_model = None
+
+            # always load metrics meta (for audit + fallback weights)
+            fusion_meta = _read_json(self.settings.fusion_external_metrics_path) or None
+            if fusion_meta and isinstance(fusion_meta.get("fusion_weights"), dict):
+                fw = fusion_meta["fusion_weights"]
+                if all(k in fw for k in ("w_tabular", "w_gnn", "bias")):
+                    fusion_w = FusionWeights(
+                        w_tabular=float(fw["w_tabular"]),
+                        w_gnn=float(fw["w_gnn"]),
+                        bias=float(fw["bias"]),
+                    )
+
             self._artifacts = LoadedArtifacts(
                 tabular_model=model,
-                thresholds=thresholds,
+                thresholds_tabular=thresholds_tab,
                 expected_columns=cols,
                 feature_spec=feature_spec,
                 preprocessor=pre,
                 estimator=est,
                 transformed_feature_names=feat_names,
+                fusion_external_model=fusion_model,
+                fusion_external_thresholds=fusion_thr,
+                fusion_external_weights=fusion_w,
+                fusion_external_meta=fusion_meta,
             )
             self._last_error = None
         except Exception as e:
             self._artifacts = None
             self._last_error = f"{type(e).__name__}: {e}"
 
+    def _predict_tabular_scores(self, rows: List[Dict[str, Any]]) -> np.ndarray:
+        art = self.artifacts
+        X = _prepare_dataframe(rows, art.expected_columns)
+        # ВАЖНО: оставляем DataFrame, чтобы не было sklearn warning про feature names
+        p = art.tabular_model.predict_proba(X)[:, 1]
+        return np.asarray(p, dtype="float64")
+
     def predict_tabular(
-        self,
-        rows: List[Dict[str, Any]],
-        with_reasons: bool,
-        reasons_topk: int,
+            self,
+            rows: List[Dict[str, Any]],
+            with_reasons: bool,
+            reasons_topk: int,
     ) -> Tuple[List[Dict[str, Any]], str]:
         art = self.artifacts
-
-        X = _prepare_dataframe(rows, art.expected_columns)
-
-        # predict_proba
-        try:
-            p = art.tabular_model.predict_proba(X)[:, 1]
-        except Exception:
-            # иногда sklearn Pipeline ожидает ndarray — но у тебя сейчас df работает;
-            # оставим fallback на values
-            p = art.tabular_model.predict_proba(X.values)[:, 1]
+        p = self._predict_tabular_scores(rows)
 
         items: List[Dict[str, Any]] = []
 
-        # reasons: быстро через LightGBM contrib (если доступно и не слишком много строк)
         reasons_allowed = (
-            self.settings.enable_reasons
-            and bool(with_reasons)
-            and len(rows) <= self.settings.reasons_max_rows
+                self.settings.enable_reasons
+                and bool(with_reasons)
+                and len(rows) <= self.settings.reasons_max_rows
         )
 
         contrib = None
+        X = None
         if reasons_allowed and art.estimator is not None and art.preprocessor is not None:
-            # трансформируем фичи как в пайплайне
             try:
+                X = _prepare_dataframe(rows, art.expected_columns)
                 Xt = art.preprocessor.transform(X)
-                # для LGBM sklearn обычно принимает numpy/scipy
                 contrib = _try_contrib(art.estimator, Xt)
             except Exception:
                 contrib = None
 
         for i in range(len(rows)):
             score = float(p[i])
-            decision = _make_decision(score, art.thresholds)
+            decision = _make_decision(score, art.thresholds_tabular)
 
             top_reasons = None
             if reasons_allowed and contrib is not None:
                 row_contrib = np.asarray(contrib[i])
-                # last is bias
                 if row_contrib.ndim == 1 and row_contrib.shape[0] >= 2:
                     contrib_wo_bias = row_contrib[:-1]
 
@@ -281,14 +333,12 @@ class FraudService:
                     if names and len(names) == len(contrib_wo_bias):
                         pairs = list(zip(names, contrib_wo_bias))
                     else:
-                        # fallback: если не знаем transformed names — покажем raw columns (хуже, но стабильно)
                         raw_names = art.expected_columns[: len(contrib_wo_bias)]
                         pairs = list(zip(raw_names, contrib_wo_bias))
 
                     pairs.sort(key=lambda x: abs(float(x[1])), reverse=True)
                     pairs = pairs[: max(1, int(reasons_topk))]
 
-                    # value: попробуем взять из исходного rows (только для raw cols)
                     raw_row = rows[i] or {}
                     out_reasons = []
                     for feat, c in pairs:
@@ -311,6 +361,70 @@ class FraudService:
 
         return items, "tabular"
 
+    def predict_fusion_external(
+            self,
+            rows: List[Dict[str, Any]],
+            gnn_scores: List[float],
+            with_reasons: bool,
+            reasons_topk: int,
+    ) -> Tuple[List[Dict[str, Any]], str]:
+        art = self.artifacts
+        if art.fusion_external_thresholds is None:
+            raise PredictError("Fusion external thresholds are not loaded.")
+
+        if len(gnn_scores) != len(rows):
+            raise PredictError("gnn_scores length must match number of rows.")
+
+        p_tab = self._predict_tabular_scores(rows)
+        p_gnn = np.asarray(gnn_scores, dtype="float64")
+
+        if np.any(~np.isfinite(p_gnn)):
+            raise PredictError("gnn_score contains non-finite values.")
+        if np.any(p_gnn < 0.0) or np.any(p_gnn > 1.0):
+            raise PredictError("gnn_score must be in [0, 1].")
+
+        # 1) Try use saved model if it exposes predict_proba with (p_tab, p_gnn)
+        p_f = None
+        if art.fusion_external_model is not None:
+            try:
+                # support your FusionModel-like wrapper (has predict_proba(p_tab, p_gnn))
+                if hasattr(art.fusion_external_model, "predict_proba"):
+                    p_f = art.fusion_external_model.predict_proba(p_tab, p_gnn)
+            except Exception:
+                p_f = None
+
+        # 2) Fallback: compute via weights from metrics (logit scheme)
+        if p_f is None:
+            if art.fusion_external_weights is None:
+                raise PredictError(
+                    "Fusion model is not available and fusion_weights are missing "
+                    "(check artifacts/evaluation/fusion_metrics_external.json)."
+                )
+            w = art.fusion_external_weights
+            z = w.bias + w.w_tabular * _logit(p_tab) + w.w_gnn * _logit(p_gnn)
+            p_f = _sigmoid(z)
+
+        p_f = np.asarray(p_f, dtype="float64")
+        p_f = np.clip(p_f, 1e-6, 1.0 - 1e-6)
+
+        # reasons: табличные причины (влияние признаков на tabular), это “объяснимость системы”
+        tab_items, _ = self.predict_tabular(rows=rows, with_reasons=with_reasons, reasons_topk=reasons_topk)
+
+        items: List[Dict[str, Any]] = []
+        for i in range(len(rows)):
+            score = float(p_f[i])
+            decision = _make_decision(score, art.fusion_external_thresholds)
+            items.append(
+                {
+                    "risk_score": score,
+                    "decision": decision,
+                    # показываем табличные причины (это норм для комиссии: “наиболее интерпретируемая часть”)
+                    "top_reasons": tab_items[i].get("top_reasons"),
+                }
+            )
+
+        return items, "fusion_external"
+
     def features_info(self) -> Dict[str, Any]:
         """
         Для /features: список ожидаемых колонок + группы из feature_spec.
@@ -323,5 +437,27 @@ class FraudService:
             "groups": {
                 "num_cols": spec.get("num_cols", []),
                 "cat_cols": spec.get("cat_cols", []),
+            },
+        }
+
+    def models_info(self) -> Dict[str, Any]:
+        art = self.artifacts
+        return {
+            "available": ["tabular", "fusion_external"],
+            "default_model": self.settings.default_model,
+            "tabular": {
+                "ready": True,
+                "model_path": self.settings.tabular_model_path,
+                "thresholds_path": self.settings.thresholds_tabular_path,
+                "feature_spec_path": self.settings.feature_spec_path,
+            },
+            "fusion_external": {
+                "ready": bool(art.fusion_external_thresholds is not None),
+                "model_path": self.settings.fusion_external_model_path,
+                "thresholds_path": self.settings.thresholds_fusion_external_path,
+                "metrics_path": self.settings.fusion_external_metrics_path,
+                "loaded_pkl": bool(art.fusion_external_model is not None),
+                "loaded_weights_fallback": bool(art.fusion_external_weights is not None),
+                "meta": art.fusion_external_meta or {},
             },
         }

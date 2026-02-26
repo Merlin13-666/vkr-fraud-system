@@ -8,15 +8,27 @@ from pydantic import BaseModel, Field
 # --- INPUT ---
 
 class PredictOptions(BaseModel):
-    model: str = Field(default="tabular", description="Какую модель использовать (пока доступна tabular).")
-    input_format: Literal["canonical"] = Field(default="canonical", description="Формат input (для канонического запроса).")
-    with_reasons: bool = Field(default=False, description="Вернуть top_reasons (вклады признаков).")
+    model: Literal["tabular", "fusion_external"] = Field(
+        default="tabular",
+        description="Какую модель использовать: tabular или fusion_external (основной режим).",
+    )
+    input_format: Literal["canonical", "rows"] = Field(
+        default="canonical",
+        description="Формат входа (canonical/rows).",
+    )
+    with_reasons: bool = Field(default=False, description="Вернуть top_reasons (вклады признаков) (только табличные причины).")
     reasons_topk: int = Field(default=5, ge=1, le=50, description="Сколько причин вернуть (top-k).")
 
 
 class CanonicalTransaction(BaseModel):
     transaction_id: str = Field(..., description="Идентификатор транзакции (ваш).")
     features: Dict[str, Any] = Field(..., description="Словарь фич (можно присылать частично).")
+    gnn_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Скор GNN (0..1). Нужен если model=fusion_external.",
+    )
 
 
 class PredictRequestCanonical(BaseModel):
@@ -25,6 +37,8 @@ class PredictRequestCanonical(BaseModel):
 
 
 class PredictRequestRows(BaseModel):
+    # rows-формат: каждая строка — dict фич
+    # Допускаем gnn_score прямо внутри строки (опционально)
     rows: List[Dict[str, Any]] = Field(..., description="Список строк-фич. transaction_id будет row_1, row_2, ...")
 
 
@@ -52,9 +66,15 @@ class PredictResponse(BaseModel):
 
 class ReadyResponse(BaseModel):
     ready: bool
+
     model_path: str
-    thresholds_path: str
+    thresholds_tabular_path: str
     feature_spec_path: str
+
+    fusion_external_model_path: str
+    thresholds_fusion_external_path: str
+    fusion_external_metrics_path: str
+
     default_model: str
     error: Optional[str] = None
 

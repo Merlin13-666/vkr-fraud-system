@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import os
 import platform
+import sys
 import subprocess
 import uuid
+import numpy as np
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import Body, Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from fraud_system.api.errors import install_error_handlers, http_400, http_503
 from fraud_system.api.metrics import Metrics
@@ -24,6 +28,8 @@ from fraud_system.api.security import build_api_key_scheme, require_api_key
 from fraud_system.api.service import FraudService
 from fraud_system.api.settings import ApiSettings
 
+
+_STARTED_AT_UTC = datetime.now(timezone.utc).isoformat()
 
 def _docs_ru(settings: ApiSettings) -> str:
     hdr = settings.api_key_header
@@ -51,6 +57,15 @@ def _docs_ru(settings: ApiSettings) -> str:
 ```powershell
 -Headers @{{ "{hdr}" = "super-secret" }}
 ```
+---
+## Режимы модели (важно для ВКР)
+### 1) model = `tabular`
+Используется LightGBM (табличная модель), причины (`top_reasons`) доступны.
+
+### 2) model = `fusion_external` (основной “системный” режим)
+Используется честный fusion (external): объединяет tabular + gnn_score по формуле A10 (через logit).
+**В запросе нужно передать `gnn_score` (0..1) на каждую транзакцию**.
+
 ---
 ## Форматы входа: rows vs canonical
 
@@ -166,21 +181,21 @@ def _legend_for_feature(name: str) -> str:
         return "Домены email покупателя/получателя"
     return "Признак (см. датасет/feature_spec)"
 
-def _get_git_commit_short() -> str:
-    """
-    Пытаемся получить короткий hash текущего коммита.
-    Работает, если запускается из git-репозитория и git доступен в PATH.
-    """
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        s = (out or "").strip()
-        return s if s else "unknown"
-    except Exception:
-        return "unknown"
+# def _get_git_commit_short() -> str:
+#     """
+#     Пытаемся получить короткий hash текущего коммита.
+#     Работает, если запускается из git-репозитория и git доступен в PATH.
+#     """
+#     try:
+#         out = subprocess.check_output(
+#             ["git", "rev-parse", "--short", "HEAD"],
+#             stderr=subprocess.STDOUT,
+#             text=True,
+#         )
+#         s = (out or "").strip()
+#         return s if s else "unknown"
+#     except Exception:
+#         return "unknown"
 
 def create_app(settings: ApiSettings) -> FastAPI:
     tags_metadata = [
@@ -189,7 +204,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
         {"name": "Ops", "description": "Метрики и сервисные операции."},
     ]
     started_at = datetime.now(timezone.utc).isoformat()
-    git_commit = _get_git_commit_short()
+    # git_commit = _get_git_commit_short()
 
     app = FastAPI(
         title=settings.service_name,
@@ -213,24 +228,20 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def _auth_dep(api_key: str | None = Depends(api_key_scheme)) -> None:
         require_api_key(settings, api_key)
 
-    # -----------------
-    # Service
-    # -----------------
+    @app.get("/version", tags=["Service"])
+    def version():
+        return {
+            "service": settings.service_name,
+            "version": "1.0",
+            "git_commit": (os.getenv("GIT_COMMIT") or os.getenv("FRAUD_API_GIT_COMMIT") or "unknown"),
+            "started_at_utc": _STARTED_AT_UTC,
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+        }
 
     @app.get("/", tags=["Service"])
     def root():
         return {"service": settings.service_name, "docs": "/docs", "health": "/health", "version": "/version"}
-
-    @app.get("/version", response_model=VersionResponse, tags=["Service"], summary="Build/runtime info for audit")
-    def version():
-        return VersionResponse(
-            service=settings.service_name,
-            version="1.0",
-            git_commit=git_commit,
-            started_at_utc=started_at,
-            python=platform.python_version(),
-            platform=f"{platform.system()} {platform.release()} ({platform.platform()})",
-        )
 
     @app.get("/health", tags=["Service"])
     def health():
@@ -240,16 +251,24 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def ready():
         return {
             "ready": svc.is_ready(),
+
             "model_path": settings.tabular_model_path,
-            "thresholds_path": settings.thresholds_path,
+            "thresholds_tabular_path": settings.thresholds_tabular_path,
             "feature_spec_path": settings.feature_spec_path,
+
+            "fusion_external_model_path": settings.fusion_external_model_path,
+            "thresholds_fusion_external_path": settings.thresholds_fusion_external_path,
+            "fusion_external_metrics_path": settings.fusion_external_metrics_path,
+
             "default_model": settings.default_model,
             "error": svc.last_error,
         }
 
-    # -----------------
-    # Ops
-    # -----------------
+    @app.get("/models", tags=["Ops"], summary="Состояние моделей (для аудита/ВКР)")
+    def models():
+        if not svc.is_ready():
+            raise http_503("Service not ready. Call /ready")
+        return svc.models_info()
 
     @app.get("/metrics", tags=["Ops"])
     def metrics_endpoint():
@@ -274,32 +293,38 @@ def create_app(settings: ApiSettings) -> FastAPI:
         info = svc.features_info()
         expected = info.get("expected_columns", [])
         info["legend"] = {c: _legend_for_feature(c) for c in expected}
+        # плюс подсказка для fusion
+        info["fusion_external_hint"] = {
+            "requires": "gnn_score per transaction",
+            "gnn_score_range": "[0,1]",
+        }
         return info
 
     @app.get("/examples", tags=["Ops"], summary="Готовые примеры запросов и PowerShell-команды")
     def examples():
         hdr = settings.api_key_header
+        base = f"http://{settings.host}:{settings.port}"
         return {
-            "powershell_rows": [
+            "powershell_rows_tabular": [
                 '$payload = @{ rows = @(@{ TransactionAmt = 100.0; ProductCD = "W" }) } | ConvertTo-Json -Depth 10',
-                f'Invoke-RestMethod -Uri "http://{settings.host}:{settings.port}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
-            "powershell_canonical": [
+            "powershell_canonical_tabular_reasons": [
                 '$payload = @{ options = @{ model="tabular"; input_format="canonical"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
-                f'Invoke-RestMethod -Uri "http://{settings.host}:{settings.port}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+            ],
+            "powershell_canonical_fusion_external": [
+                '$payload = @{ options = @{ model="fusion_external"; input_format="canonical"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; gnn_score=0.12; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
+                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
         }
-
-    # -----------------
-    # Prediction
-    # -----------------
 
     @app.post(
         "/predict",
         response_model=PredictResponse,
         tags=["Prediction"],
         dependencies=[Depends(_auth_dep)],
-        summary="Скоринг транзакций (tabular). Поддерживает rows и canonical.",
+        summary="Скоринг транзакций (tabular / fusion_external). Поддерживает rows и canonical.",
     )
     def predict(
             request: Request,
@@ -313,30 +338,80 @@ def create_app(settings: ApiSettings) -> FastAPI:
 
         rid = getattr(request.state, "request_id", None) or str(uuid.uuid4())
 
-        # Определяем формат по ключам
+        # Parse format
         if "rows" in payload:
             req = PredictRequestRows(**payload)
             input_format = "rows"
-            rows = req.rows
-            tx_ids = [f"row_{i + 1}" for i in range(len(rows))]
-            with_reasons = False
+            rows_raw = req.rows
+            tx_ids = [f"row_{i + 1}" for i in range(len(rows_raw))]
+
+            # model for rows: optional (default)
+            model_name = settings.default_model
+            if "options" in payload and isinstance(payload["options"], dict):
+                model_name = str(payload["options"].get("model", model_name))
+
+            with_reasons = False  # rows is “fast”
             reasons_topk = settings.reasons_topk_default
+
+            # extract gnn_score if present in each row dict
+            gnn_scores: List[float] = []
+            rows: List[Dict[str, Any]] = []
+            for r in rows_raw:
+                rr = dict(r or {})
+                g = rr.pop("gnn_score", None)
+                if g is not None:
+                    try:
+                        gnn_scores.append(float(g))
+                    except Exception:
+                        gnn_scores.append(float("nan"))
+                else:
+                    gnn_scores.append(float("nan"))
+                rows.append(rr)
+
         elif "transactions" in payload:
             req = PredictRequestCanonical(**payload)
             input_format = "canonical"
-            with_reasons = req.options.with_reasons
-            reasons_topk = req.options.reasons_topk or settings.reasons_topk_default
+            model_name = req.options.model or settings.default_model
+            with_reasons = bool(req.options.with_reasons)
+            reasons_topk = int(req.options.reasons_topk or settings.reasons_topk_default)
+
             tx_ids = [t.transaction_id for t in req.transactions]
             rows = [t.features for t in req.transactions]
+            gnn_scores = []
+            for t in req.transactions:
+                g = t.gnn_score
+                gnn_scores.append(float(g) if g is not None else float("nan"))
         else:
             raise http_400("Неверный формат тела. Нужно либо {'rows':[...]} либо {'options':..., 'transactions':[...]}")
 
-        items_raw, model_name = svc.predict_tabular(
-            rows=rows,
-            with_reasons=with_reasons,
-            reasons_topk=reasons_topk,
-        )
+        # Route by model
+        model_name = str(model_name).strip().lower()
+        if model_name not in {"tabular", "fusion_external"}:
+            raise http_400("options.model must be one of: tabular, fusion_external")
 
+        if model_name == "tabular":
+            items_raw, used_model = svc.predict_tabular(
+                rows=rows,
+                with_reasons=with_reasons,
+                reasons_topk=reasons_topk,
+            )
+        else:
+            # fusion_external requires gnn_score per row
+            if any(not (0.0 <= x <= 1.0) for x in gnn_scores if np.isfinite(x)):
+                # will be validated inside service too
+                pass
+            # if some are NaN -> error: you must provide gnn_score for each transaction
+            if any(not np.isfinite(x) for x in gnn_scores):
+                raise http_400("model=fusion_external requires gnn_score for each transaction (0..1).")
+
+            items_raw, used_model = svc.predict_fusion_external(
+                rows=rows,
+                gnn_scores=[float(x) for x in gnn_scores],
+                with_reasons=with_reasons,
+                reasons_topk=reasons_topk,
+            )
+
+        # Build response
         items: List[PredictItem] = []
         for i, it in enumerate(items_raw):
             reasons = None
@@ -345,14 +420,14 @@ def create_app(settings: ApiSettings) -> FastAPI:
             items.append(
                 PredictItem(
                     transaction_id=tx_ids[i],
-                    risk_score=it["risk_score"],
+                    risk_score=float(it["risk_score"]),
                     decision=it["decision"],
                     top_reasons=reasons,
                 )
             )
 
         return PredictResponse(
-            model=model_name,
+            model=used_model,
             input_format=input_format,
             items=items,
             request_id=rid,
