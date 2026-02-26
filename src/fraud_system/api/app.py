@@ -50,6 +50,7 @@ def _docs_ru(settings: ApiSettings) -> str:
 ```
 ---
 ## Форматы входа: rows vs canonical
+
 ### 1) rows (короткий формат)
 
 Когда нужно “быстро закинуть фичи”.
@@ -81,20 +82,58 @@ transaction_id создаётся автоматически: row_1, row_2, ...
 }}
 ```
 ---
-### Что такое decision
-
-decision вычисляется по порогам из thresholds_tabular.json:
-- risk_score >= deny → deny
-- risk_score >= review → review
-- иначе → allow
+### Что означает risk_score и decision
+- risk_score ∈ [0..1] — скор/вероятность мошенничества (чем больше, тем “хуже”).
+- decision вычисляется по порогам из `thresholds_tabular.json`:
+    - `risk_score >= deny` → `deny`
+    - `risk_score >= review` → `review`
+    - иначе → `allow`
 ---
 ### Что такое top_reasons
 
-Это быстрые вклады признаков через LightGBM pred_contrib=True (это не SHAP-графики).
-Возвращаем top-k по модулю вклада.
+Это список top-k причин (вклады признаков), которые сильнее всего повлияли на скор.
+Возвращается только если `with_reasons=true` (canonical).
 
 Ограничение безопасности: если строк слишком много — reasons могут быть отключены.
-"""
+---
+## Типичные ошибки и как их чинить
+### 401 Invalid API key
+
+Причина: не передан заголовок `{hdr}` или неверный ключ.
+
+Решение: задай ключ и перезапусти сервис:
+```powershell
+$env:FRAUD_API_API_KEY="super-secret"
+```
+И передавай заголовок:
+```powershell
+-Headers @{{ "{hdr}" = "super-secret" }}
+```
+### 400 invalid payload
+
+Причина: тело запроса не соответствует rows или canonical.
+
+Решение: см. примеры выше или открой `GET /examples`.
+
+### 503 not ready
+
+Причина: сервис не загрузил модель/пороги/spec.
+
+Решение: проверь `GET /ready`.
+
+### 405 Method Not Allowed на /predict
+
+Норма: `/predict` принимает только POST.
+___
+## Служебные endpoints
+- `GET /` — краткая информация
+- `GET /docs` — документация (эта страница)
+- `GET /health` — жив ли сервис
+- `GET /ready` — готовность + пути к артефактам
+- `GET /features` — список признаков, группы и легенда
+- `GET /metrics` — метрики (если включены)
+- `GET /examples` — готовые примеры запросов
+""".strip()
 
 def _legend_for_feature(name: str) -> str:
 # Короткая “расшифровка”, чтобы /docs выглядел человечно
