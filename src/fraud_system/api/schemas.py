@@ -12,11 +12,10 @@ class PredictOptions(BaseModel):
         default="tabular",
         description="Какую модель использовать: tabular или fusion_external (основной режим).",
     )
-    input_format: Literal["canonical", "rows"] = Field(
-        default="canonical",
-        description="Формат входа (canonical/rows).",
+    with_reasons: bool = Field(
+        default=False,
+        description="Вернуть top_reasons (вклады признаков) — это табличные причины (LightGBM).",
     )
-    with_reasons: bool = Field(default=False, description="Вернуть top_reasons (вклады признаков) (только табличные причины).")
     reasons_topk: int = Field(default=5, ge=1, le=50, description="Сколько причин вернуть (top-k).")
 
 
@@ -39,6 +38,11 @@ class PredictRequestCanonical(BaseModel):
 class PredictRequestRows(BaseModel):
     # rows-формат: каждая строка — dict фич
     # Допускаем gnn_score прямо внутри строки (опционально)
+    # Плюс опционально разрешаем options, чтобы rows мог вызывать fusion_external
+    options: Optional[PredictOptions] = Field(
+        default=None,
+        description="Опции (если не заданы — используется default_model сервиса; reasons для rows обычно отключены).",
+    )
     rows: List[Dict[str, Any]] = Field(..., description="Список строк-фич. transaction_id будет row_1, row_2, ...")
 
 
@@ -86,3 +90,29 @@ class VersionResponse(BaseModel):
     started_at_utc: str = Field(..., description="Время старта процесса (UTC, ISO).")
     python: str = Field(..., description="Python version.")
     platform: str = Field(..., description="OS/platform string.")
+
+
+class ConfigResponse(BaseModel):
+    service_name: str
+    host: str
+    port: int
+    log_level: str
+
+    auth_enabled: bool
+    api_key_header: str
+
+    default_model: str
+
+    enable_reasons: bool
+    reasons_topk_default: int
+    reasons_max_rows: int
+
+    enable_metrics: bool
+
+    tabular_model_path: str
+    thresholds_tabular_path: str
+    feature_spec_path: str
+
+    fusion_external_model_path: str
+    thresholds_fusion_external_path: str
+    fusion_external_metrics_path: str

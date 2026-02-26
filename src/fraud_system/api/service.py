@@ -181,7 +181,7 @@ class FusionWeights:
 @dataclass
 class LoadedArtifacts:
     tabular_model: Any
-    thresholds: Dict[str, float]
+    thresholds_tabular: Dict[str, float]
     expected_columns: List[str]
     feature_spec: Dict[str, Any]
     preprocessor: Any = None
@@ -243,21 +243,16 @@ class FraudService:
 
             # --- fusion external (optional) ---
             fusion_model = None
-            fusion_thr = None
-            fusion_w = None
-            fusion_meta = None
-            # thresholds for fusion
+            if Path(self.settings.fusion_external_model_path).exists():
+                try:
+                    fusion_model = _load_model_any(self.settings.fusion_external_model_path)
+                except Exception:
+                    fusion_model = None
+
             fusion_thr = _load_thresholds(self.settings.thresholds_fusion_external_path)
 
-            # try load pkl
-            try:
-                if Path(self.settings.fusion_external_model_path).exists():
-                    fusion_model = _load_model_any(self.settings.fusion_external_model_path)
-            except Exception:
-                fusion_model = None
-
-            # always load metrics meta (for audit + fallback weights)
             fusion_meta = _read_json(self.settings.fusion_external_metrics_path) or None
+            fusion_w = None
             if fusion_meta and isinstance(fusion_meta.get("fusion_weights"), dict):
                 fw = fusion_meta["fusion_weights"]
                 if all(k in fw for k in ("w_tabular", "w_gnn", "bias")):
@@ -293,24 +288,21 @@ class FraudService:
         return np.asarray(p, dtype="float64")
 
     def predict_tabular(
-            self,
-            rows: List[Dict[str, Any]],
-            with_reasons: bool,
-            reasons_topk: int,
+        self,
+        rows: List[Dict[str, Any]],
+        with_reasons: bool,
+        reasons_topk: int,
     ) -> Tuple[List[Dict[str, Any]], str]:
         art = self.artifacts
         p = self._predict_tabular_scores(rows)
 
-        items: List[Dict[str, Any]] = []
-
         reasons_allowed = (
-                self.settings.enable_reasons
-                and bool(with_reasons)
-                and len(rows) <= self.settings.reasons_max_rows
+            self.settings.enable_reasons
+            and bool(with_reasons)
+            and len(rows) <= self.settings.reasons_max_rows
         )
 
         contrib = None
-        X = None
         if reasons_allowed and art.estimator is not None and art.preprocessor is not None:
             try:
                 X = _prepare_dataframe(rows, art.expected_columns)
@@ -319,6 +311,7 @@ class FraudService:
             except Exception:
                 contrib = None
 
+        items: List[Dict[str, Any]] = []
         for i in range(len(rows)):
             score = float(p[i])
             decision = _make_decision(score, art.thresholds_tabular)
@@ -328,7 +321,6 @@ class FraudService:
                 row_contrib = np.asarray(contrib[i])
                 if row_contrib.ndim == 1 and row_contrib.shape[0] >= 2:
                     contrib_wo_bias = row_contrib[:-1]
-
                     names = art.transformed_feature_names
                     if names and len(names) == len(contrib_wo_bias):
                         pairs = list(zip(names, contrib_wo_bias))
@@ -340,33 +332,25 @@ class FraudService:
                     pairs = pairs[: max(1, int(reasons_topk))]
 
                     raw_row = rows[i] or {}
-                    out_reasons = []
-                    for feat, c in pairs:
-                        out_reasons.append(
-                            {
-                                "feature": str(feat),
-                                "contribution": float(c),
-                                "value": raw_row.get(feat) if feat in raw_row else None,
-                            }
-                        )
-                    top_reasons = out_reasons
+                    top_reasons = [
+                        {
+                            "feature": str(feat),
+                            "contribution": float(c),
+                            "value": raw_row.get(feat) if feat in raw_row else None,
+                        }
+                        for feat, c in pairs
+                    ]
 
-            items.append(
-                {
-                    "risk_score": score,
-                    "decision": decision,
-                    "top_reasons": top_reasons,
-                }
-            )
+            items.append({"risk_score": score, "decision": decision, "top_reasons": top_reasons})
 
         return items, "tabular"
 
     def predict_fusion_external(
-            self,
-            rows: List[Dict[str, Any]],
-            gnn_scores: List[float],
-            with_reasons: bool,
-            reasons_topk: int,
+        self,
+        rows: List[Dict[str, Any]],
+        gnn_scores: List[float],
+        with_reasons: bool,
+        reasons_topk: int,
     ) -> Tuple[List[Dict[str, Any]], str]:
         art = self.artifacts
         if art.fusion_external_thresholds is None:
@@ -383,17 +367,17 @@ class FraudService:
         if np.any(p_gnn < 0.0) or np.any(p_gnn > 1.0):
             raise PredictError("gnn_score must be in [0, 1].")
 
-        # 1) Try use saved model if it exposes predict_proba with (p_tab, p_gnn)
         p_f = None
+
+        # 1) Try saved model (if supports predict_proba(p_tab, p_gnn))
         if art.fusion_external_model is not None:
             try:
-                # support your FusionModel-like wrapper (has predict_proba(p_tab, p_gnn))
                 if hasattr(art.fusion_external_model, "predict_proba"):
                     p_f = art.fusion_external_model.predict_proba(p_tab, p_gnn)
             except Exception:
                 p_f = None
 
-        # 2) Fallback: compute via weights from metrics (logit scheme)
+        # 2) Fallback: weights from metrics (logit scheme)
         if p_f is None:
             if art.fusion_external_weights is None:
                 raise PredictError(
@@ -407,7 +391,7 @@ class FraudService:
         p_f = np.asarray(p_f, dtype="float64")
         p_f = np.clip(p_f, 1e-6, 1.0 - 1e-6)
 
-        # reasons: табличные причины (влияние признаков на tabular), это “объяснимость системы”
+        # reasons: табличные причины (объяснимость интерпретируемой части системы)
         tab_items, _ = self.predict_tabular(rows=rows, with_reasons=with_reasons, reasons_topk=reasons_topk)
 
         items: List[Dict[str, Any]] = []
@@ -418,7 +402,6 @@ class FraudService:
                 {
                     "risk_score": score,
                     "decision": decision,
-                    # показываем табличные причины (это норм для комиссии: “наиболее интерпретируемая часть”)
                     "top_reasons": tab_items[i].get("top_reasons"),
                 }
             )

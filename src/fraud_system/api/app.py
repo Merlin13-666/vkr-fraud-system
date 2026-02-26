@@ -3,15 +3,12 @@ from __future__ import annotations
 import os
 import platform
 import sys
-import subprocess
 import uuid
 import numpy as np
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from fastapi import Body, Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
-
 from fraud_system.api.errors import install_error_handlers, http_400, http_503
 from fraud_system.api.metrics import Metrics
 from fraud_system.api.middleware import MetricsMiddleware, RequestIdMiddleware
@@ -23,6 +20,7 @@ from fraud_system.api.schemas import (
     ReasonItem,
     ReadyResponse,
     VersionResponse,
+    ConfigResponse,
 )
 from fraud_system.api.security import build_api_key_scheme, require_api_key
 from fraud_system.api.service import FraudService
@@ -66,6 +64,12 @@ def _docs_ru(settings: ApiSettings) -> str:
 Используется честный fusion (external): объединяет tabular + gnn_score по формуле A10 (через logit).
 **В запросе нужно передать `gnn_score` (0..1) на каждую транзакцию**.
 
+---
+
+## Endpoints (рекомендованный способ)
+- `POST /predict/rows` — быстрый формат rows
+- `POST /predict/canonical` — полный формат canonical (options + reasons)
+- `POST /predict` — совместимость (auto-detect)
 ---
 ## Форматы входа: rows vs canonical
 
@@ -181,30 +185,13 @@ def _legend_for_feature(name: str) -> str:
         return "Домены email покупателя/получателя"
     return "Признак (см. датасет/feature_spec)"
 
-# def _get_git_commit_short() -> str:
-#     """
-#     Пытаемся получить короткий hash текущего коммита.
-#     Работает, если запускается из git-репозитория и git доступен в PATH.
-#     """
-#     try:
-#         out = subprocess.check_output(
-#             ["git", "rev-parse", "--short", "HEAD"],
-#             stderr=subprocess.STDOUT,
-#             text=True,
-#         )
-#         s = (out or "").strip()
-#         return s if s else "unknown"
-#     except Exception:
-#         return "unknown"
 
 def create_app(settings: ApiSettings) -> FastAPI:
     tags_metadata = [
-        {"name": "Service", "description": "Технические эндпоинты (health/ready)."},
+        {"name": "Service", "description": "Технические эндпоинты (health/ready/version/config)."},
         {"name": "Prediction", "description": "Скоринг транзакций и решение allow/review/deny."},
         {"name": "Ops", "description": "Метрики и сервисные операции."},
     ]
-    started_at = datetime.now(timezone.utc).isoformat()
-    # git_commit = _get_git_commit_short()
 
     app = FastAPI(
         title=settings.service_name,
@@ -228,7 +215,9 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def _auth_dep(api_key: str | None = Depends(api_key_scheme)) -> None:
         require_api_key(settings, api_key)
 
-    @app.get("/version", tags=["Service"])
+    # ---------------- Service
+
+    @app.get("/version", response_model=VersionResponse, tags=["Service"])
     def version():
         return {
             "service": settings.service_name,
@@ -237,6 +226,28 @@ def create_app(settings: ApiSettings) -> FastAPI:
             "started_at_utc": _STARTED_AT_UTC,
             "python": sys.version.split()[0],
             "platform": platform.platform(),
+        }
+
+    @app.get("/config", response_model=ConfigResponse, tags=["Service"], summary="Безопасный срез настроек (без ключей)")
+    def config():
+        return {
+            "service_name": settings.service_name,
+            "host": settings.host,
+            "port": settings.port,
+            "log_level": settings.log_level,
+            "auth_enabled": settings.auth_enabled(),
+            "api_key_header": settings.api_key_header,
+            "default_model": settings.default_model,
+            "enable_reasons": settings.enable_reasons,
+            "reasons_topk_default": settings.reasons_topk_default,
+            "reasons_max_rows": settings.reasons_max_rows,
+            "enable_metrics": settings.enable_metrics,
+            "tabular_model_path": settings.tabular_model_path,
+            "thresholds_tabular_path": settings.thresholds_tabular_path,
+            "feature_spec_path": settings.feature_spec_path,
+            "fusion_external_model_path": settings.fusion_external_model_path,
+            "thresholds_fusion_external_path": settings.thresholds_fusion_external_path,
+            "fusion_external_metrics_path": settings.fusion_external_metrics_path,
         }
 
     @app.get("/", tags=["Service"])
@@ -251,18 +262,17 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def ready():
         return {
             "ready": svc.is_ready(),
-
             "model_path": settings.tabular_model_path,
             "thresholds_tabular_path": settings.thresholds_tabular_path,
             "feature_spec_path": settings.feature_spec_path,
-
             "fusion_external_model_path": settings.fusion_external_model_path,
             "thresholds_fusion_external_path": settings.thresholds_fusion_external_path,
             "fusion_external_metrics_path": settings.fusion_external_metrics_path,
-
             "default_model": settings.default_model,
             "error": svc.last_error,
         }
+
+    # ---------------- Ops
 
     @app.get("/models", tags=["Ops"], summary="Состояние моделей (для аудита/ВКР)")
     def models():
@@ -293,11 +303,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
         info = svc.features_info()
         expected = info.get("expected_columns", [])
         info["legend"] = {c: _legend_for_feature(c) for c in expected}
-        # плюс подсказка для fusion
-        info["fusion_external_hint"] = {
-            "requires": "gnn_score per transaction",
-            "gnn_score_range": "[0,1]",
-        }
+        info["fusion_external_hint"] = {"requires": "gnn_score per transaction", "gnn_score_range": "[0,1]"}
         return info
 
     @app.get("/examples", tags=["Ops"], summary="Готовые примеры запросов и PowerShell-команды")
@@ -307,111 +313,28 @@ def create_app(settings: ApiSettings) -> FastAPI:
         return {
             "powershell_rows_tabular": [
                 '$payload = @{ rows = @(@{ TransactionAmt = 100.0; ProductCD = "W" }) } | ConvertTo-Json -Depth 10',
-                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+                f'Invoke-RestMethod -Uri "{base}/predict/rows" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
             "powershell_canonical_tabular_reasons": [
-                '$payload = @{ options = @{ model="tabular"; input_format="canonical"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
-                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+                '$payload = @{ options = @{ model="tabular"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
+                f'Invoke-RestMethod -Uri "{base}/predict/canonical" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
             "powershell_canonical_fusion_external": [
-                '$payload = @{ options = @{ model="fusion_external"; input_format="canonical"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; gnn_score=0.12; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
-                f'Invoke-RestMethod -Uri "{base}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
+                '$payload = @{ options = @{ model="fusion_external"; with_reasons=$true; reasons_topk=5 }; transactions = @(@{ transaction_id="tx_1"; gnn_score=0.12; features=@{ TransactionAmt=100.0; ProductCD="W" } }) } | ConvertTo-Json -Depth 20',
+                f'Invoke-RestMethod -Uri "{base}/predict/canonical" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
         }
 
-    @app.post(
-        "/predict",
-        response_model=PredictResponse,
-        tags=["Prediction"],
-        dependencies=[Depends(_auth_dep)],
-        summary="Скоринг транзакций (tabular / fusion_external). Поддерживает rows и canonical.",
-    )
-    def predict(
-            request: Request,
-            payload: Dict[str, Any] = Body(
-                ...,
-                description="Тело запроса (rows или canonical). См. описание выше и /examples.",
-            ),
-    ):
-        if not svc.is_ready():
-            raise http_503("Service not ready. Call /ready")
+    # ---------------- Prediction helpers
 
+    def _build_response(
+        request: Request,
+        input_format: str,
+        tx_ids: List[str],
+        items_raw: List[Dict[str, Any]],
+        used_model: str,
+    ) -> PredictResponse:
         rid = getattr(request.state, "request_id", None) or str(uuid.uuid4())
-
-        # Parse format
-        if "rows" in payload:
-            req = PredictRequestRows(**payload)
-            input_format = "rows"
-            rows_raw = req.rows
-            tx_ids = [f"row_{i + 1}" for i in range(len(rows_raw))]
-
-            # model for rows: optional (default)
-            model_name = settings.default_model
-            if "options" in payload and isinstance(payload["options"], dict):
-                model_name = str(payload["options"].get("model", model_name))
-
-            with_reasons = False  # rows is “fast”
-            reasons_topk = settings.reasons_topk_default
-
-            # extract gnn_score if present in each row dict
-            gnn_scores: List[float] = []
-            rows: List[Dict[str, Any]] = []
-            for r in rows_raw:
-                rr = dict(r or {})
-                g = rr.pop("gnn_score", None)
-                if g is not None:
-                    try:
-                        gnn_scores.append(float(g))
-                    except Exception:
-                        gnn_scores.append(float("nan"))
-                else:
-                    gnn_scores.append(float("nan"))
-                rows.append(rr)
-
-        elif "transactions" in payload:
-            req = PredictRequestCanonical(**payload)
-            input_format = "canonical"
-            model_name = req.options.model or settings.default_model
-            with_reasons = bool(req.options.with_reasons)
-            reasons_topk = int(req.options.reasons_topk or settings.reasons_topk_default)
-
-            tx_ids = [t.transaction_id for t in req.transactions]
-            rows = [t.features for t in req.transactions]
-            gnn_scores = []
-            for t in req.transactions:
-                g = t.gnn_score
-                gnn_scores.append(float(g) if g is not None else float("nan"))
-        else:
-            raise http_400("Неверный формат тела. Нужно либо {'rows':[...]} либо {'options':..., 'transactions':[...]}")
-
-        # Route by model
-        model_name = str(model_name).strip().lower()
-        if model_name not in {"tabular", "fusion_external"}:
-            raise http_400("options.model must be one of: tabular, fusion_external")
-
-        if model_name == "tabular":
-            items_raw, used_model = svc.predict_tabular(
-                rows=rows,
-                with_reasons=with_reasons,
-                reasons_topk=reasons_topk,
-            )
-        else:
-            # fusion_external requires gnn_score per row
-            if any(not (0.0 <= x <= 1.0) for x in gnn_scores if np.isfinite(x)):
-                # will be validated inside service too
-                pass
-            # if some are NaN -> error: you must provide gnn_score for each transaction
-            if any(not np.isfinite(x) for x in gnn_scores):
-                raise http_400("model=fusion_external requires gnn_score for each transaction (0..1).")
-
-            items_raw, used_model = svc.predict_fusion_external(
-                rows=rows,
-                gnn_scores=[float(x) for x in gnn_scores],
-                with_reasons=with_reasons,
-                reasons_topk=reasons_topk,
-            )
-
-        # Build response
         items: List[PredictItem] = []
         for i, it in enumerate(items_raw):
             reasons = None
@@ -425,12 +348,127 @@ def create_app(settings: ApiSettings) -> FastAPI:
                     top_reasons=reasons,
                 )
             )
+        return PredictResponse(model=used_model, input_format=input_format, items=items, request_id=rid)
 
-        return PredictResponse(
-            model=used_model,
-            input_format=input_format,
-            items=items,
-            request_id=rid,
+    def _run_model(
+        model_name: str,
+        rows: List[Dict[str, Any]],
+        gnn_scores: List[float],
+        with_reasons: bool,
+        reasons_topk: int,
+    ) -> (List[Dict[str, Any]], str):
+        m = str(model_name).strip().lower()
+        if m not in {"tabular", "fusion_external"}:
+            raise http_400("options.model must be one of: tabular, fusion_external")
+
+        if m == "tabular":
+            return svc.predict_tabular(rows=rows, with_reasons=with_reasons, reasons_topk=reasons_topk)
+
+        # fusion_external requires gnn_score for each row
+        if any(not np.isfinite(x) for x in gnn_scores):
+            raise http_400("model=fusion_external requires gnn_score for each transaction (0..1).")
+        if any((x < 0.0) or (x > 1.0) for x in gnn_scores):
+            raise http_400("gnn_score must be in [0,1].")
+
+        return svc.predict_fusion_external(
+            rows=rows,
+            gnn_scores=[float(x) for x in gnn_scores],
+            with_reasons=with_reasons,
+            reasons_topk=reasons_topk,
         )
+
+    # ---------------- New explicit endpoints
+
+    @app.post(
+        "/predict/rows",
+        response_model=PredictResponse,
+        tags=["Prediction"],
+        dependencies=[Depends(_auth_dep)],
+        summary="Скоринг rows (явный эндпоинт). По умолчанию reasons выключены.",
+    )
+    def predict_rows(request: Request, req: PredictRequestRows = Body(...)):
+        if not svc.is_ready():
+            raise http_503("Service not ready. Call /ready")
+
+        rows_raw = req.rows
+        tx_ids = [f"row_{i + 1}" for i in range(len(rows_raw))]
+
+        options = req.options
+        model_name = (options.model if options else settings.default_model)
+        # rows по умолчанию быстрый режим: reasons off
+        with_reasons = bool(options.with_reasons) if options else False
+        reasons_topk = int((options.reasons_topk if options else settings.reasons_topk_default) or settings.reasons_topk_default)
+
+        gnn_scores: List[float] = []
+        rows: List[Dict[str, Any]] = []
+        for r in rows_raw:
+            rr = dict(r or {})
+            g = rr.pop("gnn_score", None)
+            if g is None:
+                gnn_scores.append(float("nan"))
+            else:
+                try:
+                    gnn_scores.append(float(g))
+                except Exception:
+                    gnn_scores.append(float("nan"))
+            rows.append(rr)
+
+        items_raw, used_model = _run_model(
+            model_name=model_name,
+            rows=rows,
+            gnn_scores=gnn_scores,
+            with_reasons=with_reasons,
+            reasons_topk=reasons_topk,
+        )
+        return _build_response(request, "rows", tx_ids, items_raw, used_model)
+
+    @app.post(
+        "/predict/canonical",
+        response_model=PredictResponse,
+        tags=["Prediction"],
+        dependencies=[Depends(_auth_dep)],
+        summary="Скоринг canonical (явный эндпоинт). Полные options + reasons.",
+    )
+    def predict_canonical(request: Request, req: PredictRequestCanonical = Body(...)):
+        if not svc.is_ready():
+            raise http_503("Service not ready. Call /ready")
+
+        model_name = req.options.model or settings.default_model
+        with_reasons = bool(req.options.with_reasons)
+        reasons_topk = int(req.options.reasons_topk or settings.reasons_topk_default)
+
+        tx_ids = [t.transaction_id for t in req.transactions]
+        rows = [t.features for t in req.transactions]
+        gnn_scores = [float(t.gnn_score) if t.gnn_score is not None else float("nan") for t in req.transactions]
+
+        items_raw, used_model = _run_model(
+            model_name=model_name,
+            rows=rows,
+            gnn_scores=gnn_scores,
+            with_reasons=with_reasons,
+            reasons_topk=reasons_topk,
+        )
+        return _build_response(request, "canonical", tx_ids, items_raw, used_model)
+
+    # ---------------- Backward compatible /predict (auto-detect)
+
+    @app.post(
+        "/predict",
+        response_model=PredictResponse,
+        tags=["Prediction"],
+        dependencies=[Depends(_auth_dep)],
+        summary="Скоринг (совместимость): auto-detect rows/canonical. Лучше использовать /predict/rows или /predict/canonical.",
+    )
+    def predict_compat(
+        request: Request,
+        payload: Dict[str, Any] = Body(..., description="Тело запроса (rows или canonical)."),
+    ):
+        if "rows" in payload:
+            req = PredictRequestRows(**payload)
+            return predict_rows(request, req)
+        if "transactions" in payload:
+            req = PredictRequestCanonical(**payload)
+            return predict_canonical(request, req)
+        raise http_400("Неверный формат тела. Нужно либо {'rows':[...]} либо {'options':..., 'transactions':[...]}")
 
     return app
