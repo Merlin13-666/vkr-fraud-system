@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import requests
 
+
 def wait_api(base_url: str, timeout_s: int = 10) -> None:
     url = base_url.rstrip("/") + "/health"
     try:
@@ -40,32 +41,26 @@ def post_predict(
     except requests.exceptions.ConnectionError as e:
         raise RuntimeError(
             f"Не удалось подключиться к API: {url}. "
-            f"Проверь что сервер запущен (python -m scripts.13_serve_api) и порт верный. "
+            f"Проверь что сервер запущен и порт верный. "
             f"Ошибка: {e}"
-        )
-
-    # Явное сообщение для частой ошибки
-    if resp.status_code == 401:
-        raise RuntimeError(
-            f"HTTP 401: {resp.text}\n"
-            f"Подсказка: передай ключ через --api-key или выставь env FRAUD_API_API_KEY."
         )
 
     if resp.status_code >= 400:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
-
     return resp.json()
+
 
 def read_input(path: str) -> pd.DataFrame:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(path)
 
-    if p.suffix.lower() in {".parquet"}:
+    suf = p.suffix.lower()
+    if suf == ".parquet":
         return pd.read_parquet(p)
-    if p.suffix.lower() in {".csv"}:
+    if suf == ".csv":
         return pd.read_csv(p)
-    if p.suffix.lower() in {".json"}:
+    if suf == ".json":
         # ожидаем либо list[dict], либо {"rows":[...]}
         obj = json.loads(p.read_text(encoding="utf-8"))
         if isinstance(obj, dict) and "rows" in obj:
@@ -92,9 +87,10 @@ def save_output(items: List[Dict[str, Any]], out_path: str) -> None:
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
-    if p.suffix.lower() == ".parquet":
+    suf = p.suffix.lower()
+    if suf == ".parquet":
         df.to_parquet(p, index=False)
-    elif p.suffix.lower() == ".csv":
+    elif suf == ".csv":
         df.to_csv(p, index=False)
     else:
         p.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -111,39 +107,48 @@ def print_summary(items: List[Dict[str, Any]]) -> None:
     print(df["risk_score"].describe())
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="Path to input file: .parquet/.csv/.json")
     ap.add_argument("--out", required=True, help="Output file: .parquet/.csv/.json")
     ap.add_argument("--base-url", default="http://127.0.0.1:8000", help="API base url")
     ap.add_argument("--endpoint", default="/predict/rows", help="API endpoint (/predict/rows or /predict/canonical)")
-    ap.add_argument("--api-key", default=os.getenv("FRAUD_API_API_KEY", ""), help="API key (or env FRAUD_API_API_KEY)")
+    ap.add_argument(
+        "--api-key",
+        default=os.getenv("FRAUD_API_API_KEY", ""),
+        help="API key (or env FRAUD_API_API_KEY). ВАЖНО: env должен быть в этом терминале.",
+    )
     ap.add_argument("--batch-size", type=int, default=500, help="Batch size")
     ap.add_argument("--model", choices=["tabular", "fusion_external"], default="tabular", help="Model for rows endpoint")
     args = ap.parse_args()
 
+    # Ранний фейл с понятной подсказкой (чтобы не ловить 401 внутри цикла)
+    if not args.api_key:
+        raise RuntimeError(
+            "Missing API key. Передай --api-key <key> или установи env FRAUD_API_API_KEY "
+            "в этом терминале (например: $env:FRAUD_API_API_KEY='super-secret')."
+        )
+
+    wait_api(args.base_url)
+
     df = read_input(args.input)
 
-    # Для fusion_external на rows требуется gnn_score в данных
     include_gnn = (args.model == "fusion_external")
     if include_gnn and "gnn_score" not in df.columns:
         raise ValueError("model=fusion_external требует колонку gnn_score в input файле")
 
     all_items: List[Dict[str, Any]] = []
-
     n = len(df)
+
     for start in range(0, n, args.batch_size):
-        wait_api(args.base_url)
         batch = df.iloc[start : start + args.batch_size].copy()
 
         payload = to_payload_rows(batch, include_gnn=include_gnn)
-
-        # rows endpoint: options можно передать прямо туда
         payload["options"] = {"model": args.model, "with_reasons": False, "reasons_topk": 5}
 
         res = post_predict(
             base_url=args.base_url,
-            api_key=args.api_key if args.api_key else None,
+            api_key=args.api_key,
             endpoint=args.endpoint,
             payload=payload,
         )
