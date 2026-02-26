@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,15 +23,9 @@ def _read_json(path: str) -> Dict[str, Any]:
 
 
 def _load_model_any(path: str) -> Any:
-    """
-    Надёжная загрузка модели:
-    - сначала joblib.load (под sklearn/lightgbm это обычно правильно)
-    - если вдруг файл не joblib — пробуем pickle
-    """
     try:
         return joblib.load(path)
     except Exception as e_joblib:
-        # fallback: pickle
         import pickle
         try:
             with open(path, "rb") as f:
@@ -40,24 +35,17 @@ def _load_model_any(path: str) -> Any:
                 "Не удалось загрузить модель.\n"
                 f"joblib: {type(e_joblib).__name__}: {e_joblib}\n"
                 f"pickle: {type(e_pickle).__name__}: {e_pickle}\n"
-                "Проверь, что artifacts/tabular/model.pkl создан в этой же версии Python/библиотек."
+                "Проверь, что artifacts создан в той же версии Python/библиотек."
             )
 
 
 def _extract_columns_from_feature_spec(spec: Dict[str, Any]) -> Optional[List[str]]:
-    """
-    Достаём expected columns из tabular_feature_spec.json.
-    Обычно там есть feature_cols.
-    """
     if not isinstance(spec, dict):
         return None
-
     cols = spec.get("feature_cols")
     if isinstance(cols, list) and cols and all(isinstance(x, str) for x in cols):
-        # remove duplicates preserving order
         return list(dict.fromkeys(cols))
 
-    # fallback: берём самый длинный список строк внутри json
     candidates: List[List[str]] = []
 
     def walk(x: Any) -> None:
@@ -79,12 +67,6 @@ def _extract_columns_from_feature_spec(spec: Dict[str, Any]) -> Optional[List[st
 
 
 def _load_thresholds(path: str) -> Dict[str, float]:
-    """
-    Поддерживаем несколько форматов:
-    - {"review": 0.7, "deny": 0.9}
-    - {"allow": 0.3, "review": 0.7, "deny": 0.9}
-    - {"thresholds": {"review":..., "deny":...}}
-    """
     data = _read_json(path) or {}
     if "thresholds" in data and isinstance(data["thresholds"], dict):
         data = data["thresholds"]
@@ -95,11 +77,11 @@ def _load_thresholds(path: str) -> Dict[str, float]:
         if isinstance(v, (int, float)):
             out[k] = float(v)
 
-    # нормализуем к deny/review
+    # нормализуем
     if "deny" not in out and "t_deny" in out:
-        out["deny"] = out["t_deny"]
+        out["deny"] = float(out["t_deny"])
     if "review" not in out and "t_review" in out:
-        out["review"] = out["t_review"]
+        out["review"] = float(out["t_review"])
 
     out.setdefault("review", 0.7)
     out.setdefault("deny", 0.9)
@@ -117,51 +99,98 @@ def _make_decision(p: float, thr: Dict[str, float]) -> str:
 
 
 def _prepare_dataframe(rows: List[Dict[str, Any]], expected_columns: List[str]) -> pd.DataFrame:
-    """
-    Ключевая штука: создаём df строго с expected_columns.
-    Недостающее -> NaN, лишнее -> игнор.
-    Поэтому можно присылать TransactionAmt+ProductCD и не падать на 431 фиче.
-    """
-    data = []
     base_template = {c: np.nan for c in expected_columns}
-
+    data = []
     for r in rows:
         base = dict(base_template)
         for k, v in (r or {}).items():
             if k in base:
                 base[k] = v
         data.append(base)
-
     return pd.DataFrame(data, columns=expected_columns)
 
 
-def _split_pipeline(model: Any) -> Tuple[Any, Any]:
+def _split_pipeline_smart(model: Any) -> Tuple[Any, Any]:
     """
-    Если model = sklearn.Pipeline(steps=[('pre', ...), ('model', LGBMClassifier)])
-    то вернём (pre, estimator). Иначе (None, model).
+    Лучший вариант для твоего кейса:
+    - если есть named_steps: берём ('pre', 'model')
+    - иначе если Pipeline.steps: last = estimator, prev = preprocessor-wrapper
+    - иначе: (None, model)
     """
-    pre = None
-    est = model
+    # 1) BEST: pipeline with explicit names (your case)
     if hasattr(model, "named_steps"):
-        pre = model.named_steps.get("pre")
-        est = model.named_steps.get("model", model)
-    return pre, est
+        ns = model.named_steps
+        pre = ns.get("pre") or ns.get("preprocess") or ns.get("prep") or ns.get("transform")
+        est = ns.get("model") or ns.get("clf") or ns.get("classifier") or ns.get("lgbm")
+        if pre is not None and est is not None:
+            return pre, est
+
+    # 2) fallback: generic Pipeline.steps
+    steps = getattr(model, "steps", None)
+    if isinstance(steps, list) and len(steps) >= 2:
+        est = steps[-1][1]
+
+        class _PreWrap:
+            def __init__(self, pipe):
+                self.pipe = pipe
+
+            def transform(self, X):
+                out = X
+                for _, step in self.pipe:
+                    if hasattr(step, "transform"):
+                        out = step.transform(out)
+                return out
+
+            def get_feature_names_out(self):
+                for _, step in reversed(self.pipe):
+                    if hasattr(step, "get_feature_names_out"):
+                        return step.get_feature_names_out()
+                raise AttributeError("no get_feature_names_out")
+
+        pre = _PreWrap(steps[:-1])
+        return pre, est
+
+    return None, model
 
 
-def _try_contrib(estimator: Any, X: pd.DataFrame) -> Optional[np.ndarray]:
+def _try_contrib(estimator: Any, Xt: Any) -> Optional[np.ndarray]:
     """
-    LightGBM sklearn API: predict(pred_contrib=True)
-    Возвращает shape (n, n_features+1), где последний — bias.
+    Надёжно для LightGBM в sklearn.Pipeline:
+    - сначала пробуем estimator.predict(..., pred_contrib=True) (если поддерживается),
+    - затем самый стабильный вариант: estimator.booster_.predict(..., pred_contrib=True).
     """
+    # нормализуем вход (часто это scipy sparse)
+    try:
+        if hasattr(Xt, "tocsr"):
+            Xt_use = Xt.tocsr()
+        else:
+            Xt_use = Xt
+    except Exception:
+        Xt_use = Xt
+
+    # 1) sklearn wrapper (может не поддерживаться)
     try:
         if hasattr(estimator, "predict"):
-            contrib = estimator.predict(X, pred_contrib=True)
+            contrib = estimator.predict(Xt_use, pred_contrib=True)
             arr = np.asarray(contrib)
-            if arr.ndim == 2 and arr.shape[0] == len(X):
+            if arr.ndim == 2:
                 return arr
     except Exception:
-        return None
+        pass
+
+    # 2) booster_.predict (самый стабильный путь)
+    try:
+        booster = getattr(estimator, "booster_", None)
+        if booster is not None and hasattr(booster, "predict"):
+            contrib = booster.predict(Xt_use, pred_contrib=True)
+            arr = np.asarray(contrib)
+            if arr.ndim == 2:
+                return arr
+    except Exception:
+        pass
+
     return None
+
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
     z = np.clip(z, -50.0, 50.0)
@@ -172,11 +201,13 @@ def _logit(p: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     p = np.clip(p, eps, 1.0 - eps)
     return np.log(p / (1.0 - p))
 
+
 @dataclass
 class FusionWeights:
     w_tabular: float
     w_gnn: float
     bias: float
+
 
 @dataclass
 class LoadedArtifacts:
@@ -184,11 +215,12 @@ class LoadedArtifacts:
     thresholds_tabular: Dict[str, float]
     expected_columns: List[str]
     feature_spec: Dict[str, Any]
+
     preprocessor: Any = None
     estimator: Any = None
     transformed_feature_names: Optional[List[str]] = None
-    # fusion external
-    fusion_external_model: Any = None  # may be sklearn LogisticRegression-wrapped or custom
+
+    fusion_external_model: Any = None
     fusion_external_thresholds: Optional[Dict[str, float]] = None
     fusion_external_weights: Optional[FusionWeights] = None
     fusion_external_meta: Optional[Dict[str, Any]] = None
@@ -214,9 +246,6 @@ class FraudService:
         return self._artifacts
 
     def reload(self) -> None:
-        """
-        Важно: не роняем процесс при проблемах — сохраняем ошибку в last_error.
-        """
         try:
             # --- tabular ---
             model = _load_model_any(self.settings.tabular_model_path)
@@ -228,18 +257,22 @@ class FraudService:
                 cols = list(getattr(model, "feature_names_in_", []) or [])
             if not cols:
                 raise PredictError(
-                    "Не удалось определить список ожидаемых колонок.\n"
-                    "Проверь artifacts/evaluation/tabular_feature_spec.json (feature_cols)."
+                    "Не удалось определить expected columns. Проверь tabular_feature_spec.json (feature_cols)."
                 )
 
-            pre, est = _split_pipeline(model)
+            pre, est = _split_pipeline_smart(model)
 
             feat_names = None
-            if pre is not None and hasattr(pre, "get_feature_names_out"):
+            if pre is not None:
                 try:
-                    feat_names = list(pre.get_feature_names_out())
+                    if hasattr(pre, "get_feature_names_out"):
+                        feat_names = list(pre.get_feature_names_out())
                 except Exception:
                     feat_names = None
+
+            # fallback: если не смогли получить transformed names — показываем raw cols
+            if not feat_names:
+                feat_names = cols
 
             # --- fusion external (optional) ---
             fusion_model = None
@@ -283,7 +316,6 @@ class FraudService:
     def _predict_tabular_scores(self, rows: List[Dict[str, Any]]) -> np.ndarray:
         art = self.artifacts
         X = _prepare_dataframe(rows, art.expected_columns)
-        # ВАЖНО: оставляем DataFrame, чтобы не было sklearn warning про feature names
         p = art.tabular_model.predict_proba(X)[:, 1]
         return np.asarray(p, dtype="float64")
 
@@ -303,11 +335,18 @@ class FraudService:
         )
 
         contrib = None
-        if reasons_allowed and art.estimator is not None and art.preprocessor is not None:
+        names = art.transformed_feature_names or art.expected_columns
+
+        if reasons_allowed and art.estimator is not None:
+            # 1) если есть preprocessor — transform, иначе пробуем raw X
             try:
                 X = _prepare_dataframe(rows, art.expected_columns)
-                Xt = art.preprocessor.transform(X)
-                contrib = _try_contrib(art.estimator, Xt)
+                if art.preprocessor is not None and hasattr(art.preprocessor, "transform"):
+                    Xt = art.preprocessor.transform(X)
+                    contrib = _try_contrib(art.estimator, Xt)
+                if contrib is None:
+                    # fallback: raw X (например LGBMClassifier без preprocessor)
+                    contrib = _try_contrib(art.estimator, X)
             except Exception:
                 contrib = None
 
@@ -321,13 +360,9 @@ class FraudService:
                 row_contrib = np.asarray(contrib[i])
                 if row_contrib.ndim == 1 and row_contrib.shape[0] >= 2:
                     contrib_wo_bias = row_contrib[:-1]
-                    names = art.transformed_feature_names
-                    if names and len(names) == len(contrib_wo_bias):
-                        pairs = list(zip(names, contrib_wo_bias))
-                    else:
-                        raw_names = art.expected_columns[: len(contrib_wo_bias)]
-                        pairs = list(zip(raw_names, contrib_wo_bias))
-
+                    # names может быть длиннее/короче — режем безопасно
+                    nn = min(len(names), len(contrib_wo_bias))
+                    pairs = list(zip(names[:nn], contrib_wo_bias[:nn]))
                     pairs.sort(key=lambda x: abs(float(x[1])), reverse=True)
                     pairs = pairs[: max(1, int(reasons_topk))]
 
@@ -355,7 +390,6 @@ class FraudService:
         art = self.artifacts
         if art.fusion_external_thresholds is None:
             raise PredictError("Fusion external thresholds are not loaded.")
-
         if len(gnn_scores) != len(rows):
             raise PredictError("gnn_scores length must match number of rows.")
 
@@ -368,8 +402,6 @@ class FraudService:
             raise PredictError("gnn_score must be in [0, 1].")
 
         p_f = None
-
-        # 1) Try saved model (if supports predict_proba(p_tab, p_gnn))
         if art.fusion_external_model is not None:
             try:
                 if hasattr(art.fusion_external_model, "predict_proba"):
@@ -377,11 +409,10 @@ class FraudService:
             except Exception:
                 p_f = None
 
-        # 2) Fallback: weights from metrics (logit scheme)
         if p_f is None:
             if art.fusion_external_weights is None:
                 raise PredictError(
-                    "Fusion model is not available and fusion_weights are missing "
+                    "Fusion model not available and fusion_weights missing "
                     "(check artifacts/evaluation/fusion_metrics_external.json)."
                 )
             w = art.fusion_external_weights
@@ -391,7 +422,6 @@ class FraudService:
         p_f = np.asarray(p_f, dtype="float64")
         p_f = np.clip(p_f, 1e-6, 1.0 - 1e-6)
 
-        # reasons: табличные причины (объяснимость интерпретируемой части системы)
         tab_items, _ = self.predict_tabular(rows=rows, with_reasons=with_reasons, reasons_topk=reasons_topk)
 
         items: List[Dict[str, Any]] = []
@@ -399,28 +429,18 @@ class FraudService:
             score = float(p_f[i])
             decision = _make_decision(score, art.fusion_external_thresholds)
             items.append(
-                {
-                    "risk_score": score,
-                    "decision": decision,
-                    "top_reasons": tab_items[i].get("top_reasons"),
-                }
+                {"risk_score": score, "decision": decision, "top_reasons": tab_items[i].get("top_reasons")}
             )
 
         return items, "fusion_external"
 
     def features_info(self) -> Dict[str, Any]:
-        """
-        Для /features: список ожидаемых колонок + группы из feature_spec.
-        """
         art = self.artifacts
         spec = art.feature_spec or {}
         return {
             "n_features": len(art.expected_columns),
             "expected_columns": art.expected_columns,
-            "groups": {
-                "num_cols": spec.get("num_cols", []),
-                "cat_cols": spec.get("cat_cols", []),
-            },
+            "groups": {"num_cols": spec.get("num_cols", []), "cat_cols": spec.get("cat_cols", [])},
         }
 
     def models_info(self) -> Dict[str, Any]:

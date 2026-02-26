@@ -7,7 +7,10 @@ import uuid
 import numpy as np
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+import concurrent.futures
+from collections import deque
 
+from fraud_system.api.rate_limit import RateLimitMiddleware
 from fastapi import Body, Depends, FastAPI, Request
 from fraud_system.api.errors import install_error_handlers, http_400, http_503
 from fraud_system.api.metrics import Metrics
@@ -91,7 +94,6 @@ transaction_id создаётся автоматически: row_1, row_2, ...
 {{
   "options": {{
     "model": "tabular",
-    "input_format": "canonical",
     "with_reasons": true,
     "reasons_topk": 5
   }},
@@ -206,7 +208,19 @@ def create_app(settings: ApiSettings) -> FastAPI:
     svc = FraudService(settings=settings)
     svc.reload()
 
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    audit = deque(maxlen=int(settings.audit_max_events))
+
     app.add_middleware(RequestIdMiddleware)
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        header_name=settings.api_key_header,
+        rps=settings.rate_limit_rps,
+        burst=settings.rate_limit_burst,
+        enabled=True,
+    )
+
     if settings.enable_metrics:
         app.add_middleware(MetricsMiddleware, metrics=metrics)
 
@@ -284,6 +298,12 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def metrics_endpoint():
         return metrics.endpoint()
 
+    @app.get("/audit/recent", tags=["Ops"], summary="Последние запросы (ring buffer) — для ВКР/аудита")
+    def audit_recent(limit: int = 50):
+        lim = max(1, min(int(limit), int(settings.audit_max_events)))
+        data = list(audit)[-lim:]
+        return {"limit": lim, "items": data}
+
     @app.post(
         "/reload",
         tags=["Ops"],
@@ -351,31 +371,47 @@ def create_app(settings: ApiSettings) -> FastAPI:
         return PredictResponse(model=used_model, input_format=input_format, items=items, request_id=rid)
 
     def _run_model(
-        model_name: str,
-        rows: List[Dict[str, Any]],
-        gnn_scores: List[float],
-        with_reasons: bool,
-        reasons_topk: int,
-    ) -> (List[Dict[str, Any]], str):
+            model_name: str,
+            rows: List[Dict[str, Any]],
+            gnn_scores: List[float],
+            with_reasons: bool,
+            reasons_topk: int,
+    ) -> tuple[List[Dict[str, Any]], str]:
         m = str(model_name).strip().lower()
         if m not in {"tabular", "fusion_external"}:
             raise http_400("options.model must be one of: tabular, fusion_external")
 
-        if m == "tabular":
-            return svc.predict_tabular(rows=rows, with_reasons=with_reasons, reasons_topk=reasons_topk)
+        # validate for fusion early (чтобы не гонять executor впустую)
+        if m == "fusion_external":
+            if any(not np.isfinite(x) for x in gnn_scores):
+                raise http_400("model=fusion_external requires gnn_score for each transaction (0..1).")
+            if any((x < 0.0) or (x > 1.0) for x in gnn_scores):
+                raise http_400("gnn_score must be in [0,1].")
 
-        # fusion_external requires gnn_score for each row
-        if any(not np.isfinite(x) for x in gnn_scores):
-            raise http_400("model=fusion_external requires gnn_score for each transaction (0..1).")
-        if any((x < 0.0) or (x > 1.0) for x in gnn_scores):
-            raise http_400("gnn_score must be in [0,1].")
+        timeout_s = max(0.1, float(settings.predict_timeout_ms) / 1000.0)
 
-        return svc.predict_fusion_external(
-            rows=rows,
-            gnn_scores=[float(x) for x in gnn_scores],
-            with_reasons=with_reasons,
-            reasons_topk=reasons_topk,
-        )
+        def _call() -> tuple[List[Dict[str, Any]], str]:
+            if m == "tabular":
+                return svc.predict_tabular(
+                    rows=rows,
+                    with_reasons=with_reasons,
+                    reasons_topk=reasons_topk,
+                )
+            return svc.predict_fusion_external(
+                rows=rows,
+                gnn_scores=[float(x) for x in gnn_scores],
+                with_reasons=with_reasons,
+                reasons_topk=reasons_topk,
+            )
+
+        fut = executor.submit(_call)
+        try:
+            return fut.result(timeout=timeout_s)
+        except concurrent.futures.TimeoutError:
+            raise http_503(
+                f"Prediction timeout ({settings.predict_timeout_ms} ms). "
+                "Reduce batch size or disable reasons."
+            )
 
     # ---------------- New explicit endpoints
 
@@ -395,9 +431,13 @@ def create_app(settings: ApiSettings) -> FastAPI:
 
         options = req.options
         model_name = (options.model if options else settings.default_model)
-        # rows по умолчанию быстрый режим: reasons off
+
+        # rows: быстрый режим, но если options.with_reasons=true — разрешим
         with_reasons = bool(options.with_reasons) if options else False
-        reasons_topk = int((options.reasons_topk if options else settings.reasons_topk_default) or settings.reasons_topk_default)
+        reasons_topk = int(
+            (options.reasons_topk if options else settings.reasons_topk_default)
+            or settings.reasons_topk_default
+        )
 
         gnn_scores: List[float] = []
         rows: List[Dict[str, Any]] = []
@@ -420,6 +460,29 @@ def create_app(settings: ApiSettings) -> FastAPI:
             with_reasons=with_reasons,
             reasons_topk=reasons_topk,
         )
+
+        # -------- audit (4.6)
+        counts = {"allow": 0, "review": 0, "deny": 0}
+        for it in items_raw:
+            d = it.get("decision")
+            if d in counts:
+                counts[d] += 1
+
+        audit.append(
+            {
+                "ts_utc": datetime.now(timezone.utc).isoformat(),
+                "request_id": getattr(request.state, "request_id", None),
+                "endpoint": "predict/rows",
+                "model_requested": str(model_name),
+                "model_used": used_model,
+                "n_items": len(items_raw),
+                "decisions": counts,
+                "with_reasons": bool(with_reasons),
+                "reasons_topk": int(reasons_topk),
+            }
+        )
+        # --------
+
         return _build_response(request, "rows", tx_ids, items_raw, used_model)
 
     @app.post(
@@ -448,6 +511,29 @@ def create_app(settings: ApiSettings) -> FastAPI:
             with_reasons=with_reasons,
             reasons_topk=reasons_topk,
         )
+
+        # -------- audit (4.6)
+        counts = {"allow": 0, "review": 0, "deny": 0}
+        for it in items_raw:
+            d = it.get("decision")
+            if d in counts:
+                counts[d] += 1
+
+        audit.append(
+            {
+                "ts_utc": datetime.now(timezone.utc).isoformat(),
+                "request_id": getattr(request.state, "request_id", None),
+                "endpoint": "predict/canonical",
+                "model_requested": str(model_name),
+                "model_used": used_model,
+                "n_items": len(items_raw),
+                "decisions": counts,
+                "with_reasons": bool(with_reasons),
+                "reasons_topk": int(reasons_topk),
+            }
+        )
+        # --------
+
         return _build_response(request, "canonical", tx_ids, items_raw, used_model)
 
     # ---------------- Backward compatible /predict (auto-detect)
