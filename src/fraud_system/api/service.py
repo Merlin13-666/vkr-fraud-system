@@ -68,23 +68,34 @@ def _extract_columns_from_feature_spec(spec: Dict[str, Any]) -> Optional[List[st
 
 def _load_thresholds(path: str) -> Dict[str, float]:
     data = _read_json(path) or {}
-    if "thresholds" in data and isinstance(data["thresholds"], dict):
+
+    # поддержка формата {"thresholds": {...}}
+    if isinstance(data.get("thresholds"), dict):
         data = data["thresholds"]
 
     out: Dict[str, float] = {}
+
+    # 1) основной формат allow/review/deny
     for k in ("allow", "review", "deny"):
         v = data.get(k)
         if isinstance(v, (int, float)):
             out[k] = float(v)
 
-    # нормализуем
-    if "deny" not in out and "t_deny" in out:
-        out["deny"] = float(out["t_deny"])
-    if "review" not in out and "t_review" in out:
-        out["review"] = float(out["t_review"])
+    # 2) твой формат t_review/t_deny
+    if "review" not in out:
+        v = data.get("t_review")
+        if isinstance(v, (int, float)):
+            out["review"] = float(v)
 
+    if "deny" not in out:
+        v = data.get("t_deny")
+        if isinstance(v, (int, float)):
+            out["deny"] = float(v)
+
+    # дефолты на крайний случай (если файл не тот/пустой)
     out.setdefault("review", 0.7)
     out.setdefault("deny", 0.9)
+
     return out
 
 
