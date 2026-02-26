@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import platform
+import subprocess
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from fastapi import Depends, FastAPI, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi import Body, Depends, FastAPI, Request
 
 from fraud_system.api.errors import install_error_handlers, http_400, http_503
 from fraud_system.api.metrics import Metrics
@@ -16,6 +18,7 @@ from fraud_system.api.schemas import (
     PredictItem,
     ReasonItem,
     ReadyResponse,
+    VersionResponse,
 )
 from fraud_system.api.security import build_api_key_scheme, require_api_key
 from fraud_system.api.service import FraudService
@@ -163,12 +166,31 @@ def _legend_for_feature(name: str) -> str:
         return "Домены email покупателя/получателя"
     return "Признак (см. датасет/feature_spec)"
 
+def _get_git_commit_short() -> str:
+    """
+    Пытаемся получить короткий hash текущего коммита.
+    Работает, если запускается из git-репозитория и git доступен в PATH.
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        s = (out or "").strip()
+        return s if s else "unknown"
+    except Exception:
+        return "unknown"
+
 def create_app(settings: ApiSettings) -> FastAPI:
     tags_metadata = [
         {"name": "Service", "description": "Технические эндпоинты (health/ready)."},
         {"name": "Prediction", "description": "Скоринг транзакций и решение allow/review/deny."},
         {"name": "Ops", "description": "Метрики и сервисные операции."},
     ]
+    started_at = datetime.now(timezone.utc).isoformat()
+    git_commit = _get_git_commit_short()
+
     app = FastAPI(
         title=settings.service_name,
         version="1.0",
@@ -191,9 +213,24 @@ def create_app(settings: ApiSettings) -> FastAPI:
     def _auth_dep(api_key: str | None = Depends(api_key_scheme)) -> None:
         require_api_key(settings, api_key)
 
+    # -----------------
+    # Service
+    # -----------------
+
     @app.get("/", tags=["Service"])
     def root():
-        return {"service": settings.service_name, "docs": "/docs", "health": "/health"}
+        return {"service": settings.service_name, "docs": "/docs", "health": "/health", "version": "/version"}
+
+    @app.get("/version", response_model=VersionResponse, tags=["Service"], summary="Build/runtime info for audit")
+    def version():
+        return VersionResponse(
+            service=settings.service_name,
+            version="1.0",
+            git_commit=git_commit,
+            started_at_utc=started_at,
+            python=platform.python_version(),
+            platform=f"{platform.system()} {platform.release()} ({platform.platform()})",
+        )
 
     @app.get("/health", tags=["Service"])
     def health():
@@ -209,6 +246,10 @@ def create_app(settings: ApiSettings) -> FastAPI:
             "default_model": settings.default_model,
             "error": svc.last_error,
         }
+
+    # -----------------
+    # Ops
+    # -----------------
 
     @app.get("/metrics", tags=["Ops"])
     def metrics_endpoint():
@@ -231,10 +272,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
         if not svc.is_ready():
             raise http_503("Service not ready. Call /ready")
         info = svc.features_info()
-        # добавим легенду
         expected = info.get("expected_columns", [])
-        legend = {c: _legend_for_feature(c) for c in expected}
-        info["legend"] = legend
+        info["legend"] = {c: _legend_for_feature(c) for c in expected}
         return info
 
     @app.get("/examples", tags=["Ops"], summary="Готовые примеры запросов и PowerShell-команды")
@@ -250,6 +289,10 @@ def create_app(settings: ApiSettings) -> FastAPI:
                 f'Invoke-RestMethod -Uri "http://{settings.host}:{settings.port}/predict" -Method Post -ContentType "application/json" -Headers @{{ "{hdr}" = "super-secret" }} -Body $payload',
             ],
         }
+
+    # -----------------
+    # Prediction
+    # -----------------
 
     @app.post(
         "/predict",

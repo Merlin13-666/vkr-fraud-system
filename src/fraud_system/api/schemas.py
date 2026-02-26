@@ -57,3 +57,12 @@ class ReadyResponse(BaseModel):
     feature_spec_path: str
     default_model: str
     error: Optional[str] = None
+
+
+class VersionResponse(BaseModel):
+    service: str
+    version: str = Field(default="1.0", description="Версия API (семантическая).")
+    git_commit: str = Field(default="unknown", description="Git commit hash (short), если доступен.")
+    started_at_utc: str = Field(..., description="Время старта процесса (UTC, ISO).")
+    python: str = Field(..., description="Python version.")
+    platform: str = Field(..., description="OS/platform string.")
