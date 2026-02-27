@@ -50,9 +50,8 @@ def _norm(p: Path) -> str:
     return str(p).replace("\\", "/")
 
 
-def _link(path: Path, label: Optional[str] = None) -> str:
-    """HTML link to a local file (works when opening report from the repo folder)."""
-    rel = _norm(path)
+def _link(path: Path, label: Optional[str] = None, base: Path = Path("reports")) -> str:
+    rel = _norm(Path(path).resolve().relative_to(base.resolve())) if base.resolve() in Path(path).resolve().parents else _norm(Path(path))
     txt = label or rel
     return f'<a href="{rel}">{txt}</a>'
 

@@ -398,23 +398,27 @@ def main() -> None:
 
     # --- postprocess: freeze physics after stabilization
     html = out_path.read_text(encoding="utf-8")
-    needles = [
-        "network = new vis.Network(container, data, options);",
-        "new vis.Network(container, data, options);",
-    ]
-    for needle in needles:
-        if needle in html:
-            html = html.replace(
-                needle,
-                needle + """
-                network.once("stabilizationIterationsDone", function () {
-                  network.setOptions({physics: {enabled: false}});
-                });
-                """,
-                1
-            )
-            out_path.write_text(html, encoding="utf-8")
-            break
+
+    if "network = new vis.Network(container, data, options);" in html:
+        html = html.replace(
+            "network = new vis.Network(container, data, options);",
+            "network = new vis.Network(container, data, options);\n"
+            'network.once("stabilizationIterationsDone", function () {'
+            "  network.setOptions({physics: {enabled: false}});"
+            "});\n",
+            1,
+        )
+    elif "new vis.Network(container, data, options);" in html:
+        html = html.replace(
+            "new vis.Network(container, data, options);",
+            "var network = new vis.Network(container, data, options);\n"
+            'network.once("stabilizationIterationsDone", function () {'
+            "  network.setOptions({physics: {enabled: false}});"
+            "});\n",
+            1,
+        )
+
+    out_path.write_text(html, encoding="utf-8")
 
     print(f"[A11+] Saved: {out_path.as_posix()}")
     print(f"[A11+] {start_title}")

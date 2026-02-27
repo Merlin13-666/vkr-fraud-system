@@ -49,8 +49,15 @@ def build_heterodata(
         sub = edges[edges["dst_type"] == dst_type]
 
         # map transaction_id -> tx_node_id
-        src = sub["src_id"].map(tx_map).astype("int64").to_numpy()
-        dst = sub["dst_id"].astype("int64").to_numpy()
+        src_mapped = sub["src_id"].map(tx_map)
+        mask = src_mapped.notna()
+
+        dropped = int((~mask).sum())
+        if dropped:
+            print(f"[pyg_build] dropped edges with unknown tx_id: {dropped} (dst_type={dst_type})")
+
+        src = src_mapped[mask].astype("int64").to_numpy()
+        dst = sub.loc[mask, "dst_id"].astype("int64").to_numpy()
 
         edge_index = torch.tensor(np.stack([src, dst], axis=0), dtype=torch.long)
 
