@@ -284,6 +284,7 @@ def main() -> None:
     pred_with_reasons_path = Path("artifacts/predict/test_tabular_with_reasons.parquet")
     pred_with_reasons_exists = pred_with_reasons_path.exists()
 
+
     # ---------
     # Titles
     # ---------
@@ -567,6 +568,22 @@ def main() -> None:
 
         shap_html = "\n".join(shap_html_parts)
 
+    graph_html_path = assets_dir / "graph.html"
+    graph_section = ""
+    if graph_html_path.exists():
+        graph_section = """
+        <h2>Graph visualization</h2>
+        <p>
+          <a href="assets/graph.html" target="_blank">Open interactive graph (pyvis)</a>
+        </p>
+        """
+    else:
+        graph_section = """
+        <h2>Graph visualization</h2>
+        <div class="muted">Graph HTML is not generated. Install <code>pyvis</code> and run step <code>A11_graph_viz</code>.</div>
+        """
+
+
     # ---------
     # Page
     # ---------
@@ -610,6 +627,10 @@ def main() -> None:
         {cost_html}
 
         {shap_html}
+        
+        <h2>Graph visualization</h2>
+        
+        {graph_section}
 
         <h2>Notes for РПЗ</h2>
         <div class="card">

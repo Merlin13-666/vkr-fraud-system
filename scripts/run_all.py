@@ -223,6 +223,15 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
+    s_graph_viz = Step(
+        key="A11_graph_viz",
+        title="Build interactive graph viz (pyvis HTML)",
+        outputs=[_p("reports", "assets", "graph.html")],
+        module="scripts.16_build_graph_viz",
+        module_args=[],
+    )
+
+
     # A11 report
     s_report = Step(
         key="A11_auto_report",
@@ -248,8 +257,8 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
 
     # evaluate should run after you have models/preds
     steps.append(s_evaluate)
-
     if not skip_report:
+        steps.append(s_graph_viz)
         steps.append(s_report)
 
     return steps
@@ -269,7 +278,9 @@ def main() -> None:
 
     parser.add_argument("--from-step", type=str, default=None, help="Start from step key (inclusive)")
     parser.add_argument("--to-step", type=str, default=None, help="Stop at step key (inclusive)")
-
+    parser.add_argument("--shap", action="store_true", help="Run optional SHAP step (B1) if shap is installed")
+    parser.add_argument("--start-api", action="store_true",
+                        help="Start FastAPI service after pipeline (B2). Blocks terminal.")
     args = parser.parse_args()
 
     steps = build_steps(
@@ -278,6 +289,27 @@ def main() -> None:
         skip_internal_fusion=args.skip_internal_fusion,
         skip_report=args.skip_report,
     )
+
+    s_shap = Step(
+        key="B1_shap",
+        title="SHAP for tabular (global plots + tables)",
+        outputs=[
+            _p("reports", "assets", "shap_summary_bar.png"),
+            _p("reports", "tables", "shap_top_features.csv"),
+        ],
+        module="scripts.12_shap_tabular",
+        module_args=[],
+    )
+    if args.shap:
+        # Вставляем SHAP перед отчётом (если отчёт в списке)
+        inserted = False
+        for idx, st in enumerate(steps):
+            if st.key == "A11_auto_report":
+                steps.insert(idx, s_shap)
+                inserted = True
+                break
+        if not inserted:
+            steps.append(s_shap)
 
     # Slice by from/to
     if args.from_step:

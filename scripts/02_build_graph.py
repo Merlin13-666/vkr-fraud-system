@@ -44,9 +44,13 @@ def main() -> None:
 
     node_map_path = out_dir / "node_map.parquet"
     edges_path = out_dir / "edges.parquet"
+    tx_index_path = out_dir / "tx_index.parquet"
 
     artifacts.node_map.to_parquet(node_map_path, index=False)
     artifacts.edges.to_parquet(edges_path, index=False)
+    artifacts.tx_index.to_parquet(tx_index_path, index=False)
+
+    print(f"[A4] Saved: {tx_index_path}")
 
     print(f"[A4] Saved: {node_map_path}")
     print(f"[A4] Saved: {edges_path}")
@@ -60,7 +64,7 @@ def main() -> None:
         "node_counts_by_type": artifacts.node_map["entity_type"].value_counts().to_dict(),
         "total_edges": int(len(artifacts.edges)),
         "edge_counts_by_dst_type": artifacts.edges["dst_type"].value_counts().to_dict(),
-        "unique_transactions": int(df_train["transaction_id"].nunique()),
+        "unique_transactions": int(artifacts.tx_index["transaction_id"].nunique()),
     }
 
     info_path = out_dir / "graph_info.json"
