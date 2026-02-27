@@ -311,6 +311,9 @@ def main() -> None:
     else:
         print("\n[DONE] Pipeline finished (report not generated).")
 
+    if args.start_api:
+        _run_module("scripts.13_serve_api", [])
+
 
 if __name__ == "__main__":
     main()

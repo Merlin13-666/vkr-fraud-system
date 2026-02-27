@@ -14,6 +14,7 @@ from fraud_system.api.rate_limit import RateLimitMiddleware
 from fastapi import Body, Depends, FastAPI, Request
 from fraud_system.api.errors import install_error_handlers, http_400, http_503
 from fraud_system.api.metrics import Metrics
+from fastapi.middleware.cors import CORSMiddleware
 from fraud_system.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from fraud_system.api.schemas import (
     PredictRequestCanonical,
@@ -201,6 +202,18 @@ def create_app(settings: ApiSettings) -> FastAPI:
         description=_docs_ru(settings),
         openapi_tags=tags_metadata,
     )
+
+    origins_raw = os.getenv("FRAUD_API_CORS_ORIGINS", "").strip()
+    if origins_raw:
+        origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
+        if origins:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_credentials=False,
+                allow_methods=["GET", "POST"],
+                allow_headers=["*"],
+            )
 
     install_error_handlers(app)
 

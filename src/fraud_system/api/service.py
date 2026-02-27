@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import joblib
 import numpy as np
 import pandas as pd
+import shap
 
 from fraud_system.api.errors import PredictError
 from fraud_system.api.settings import ApiSettings
@@ -202,6 +203,69 @@ def _try_contrib(estimator: Any, Xt: Any) -> Optional[np.ndarray]:
 
     return None
 
+def _shap_values_binary(explainer: Any, X: Any) -> np.ndarray:
+    """
+    Возвращает SHAP values для positive class (class=1) как (n_rows, n_features).
+    Поддерживает:
+      - explainer(X) -> shap.Explanation
+      - explainer.shap_values(X) -> list[np.ndarray] или np.ndarray
+    """
+    sv: Any = None
+
+    # 1) Новый стиль: explainer(X) -> Explanation
+    try:
+        exp = explainer(X)
+        if hasattr(exp, "values"):
+            sv = exp.values
+    except Exception:
+        sv = None
+
+    # 2) Старый стиль: shap_values()
+    if sv is None:
+        sv = explainer.shap_values(X)
+
+    # 2a) binary: list[class0, class1] -> class1
+    if isinstance(sv, list):
+        if len(sv) >= 2:
+            sv = sv[1]
+        elif len(sv) == 1:
+            sv = sv[0]
+
+    sv = np.asarray(sv)
+
+    # Иногда прилетает (n, 2, m) или (2, n, m) — аккуратно режем
+    # (редко, но лучше подстраховаться)
+    if sv.ndim == 3:
+        # попробуем интерпретировать как (classes, n, m) или (n, classes, m)
+        if sv.shape[0] == 2:
+            sv = sv[1]
+        elif sv.shape[1] == 2:
+            sv = sv[:, 1, :]
+        else:
+            raise PredictError(f"Unexpected SHAP 3D shape: {sv.shape}")
+
+    # Гарантируем 2D
+    if sv.ndim == 1:
+        sv = sv.reshape(1, -1)
+
+    if sv.ndim != 2:
+        raise PredictError(f"Unexpected SHAP values shape: {sv.shape}")
+
+    return sv
+
+def _reason_value_from_raw(raw_row: Dict[str, Any], feat_name: str) -> Any:
+    # 1) прямое совпадение (редко, но бывает)
+    if feat_name in raw_row:
+        return raw_row.get(feat_name)
+
+    # 2) one-hot вида "col_value" или "col___MISSING__"
+    # берем часть до первого "_"
+    if "_" in feat_name:
+        base = feat_name.split("_", 1)[0]
+        if base in raw_row:
+            return raw_row.get(base)
+
+    return None
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
     z = np.clip(z, -50.0, 50.0)
@@ -235,6 +299,12 @@ class LoadedArtifacts:
     fusion_external_thresholds: Optional[Dict[str, float]] = None
     fusion_external_weights: Optional[FusionWeights] = None
     fusion_external_meta: Optional[Dict[str, Any]] = None
+
+    # --- SHAP (optional, for reasons)
+    shap_explainer: Any = None
+    shap_uses_transformed: bool = True
+    shap_feature_names: Optional[List[str]] = None
+    shap_model_output: str = "raw"  # "raw" (log-odds) - fastest/stable
 
 
 class FraudService:
@@ -273,6 +343,23 @@ class FraudService:
 
             pre, est = _split_pipeline_smart(model)
 
+            # --- SHAP explainer (optional) ---
+            shap_explainer = None
+            shap_uses_transformed = True
+
+            # Создаём explainer только если reasons потенциально нужны
+            if self.settings.enable_reasons:
+                try:
+                    # Важно: объяснять лучше estimator/booster, а не весь pipeline
+                    booster = getattr(est, "booster_", None)
+                    if booster is not None:
+                        shap_explainer = shap.TreeExplainer(booster)
+                    else:
+                        shap_explainer = shap.TreeExplainer(est)
+                except Exception:
+                    shap_explainer = None
+                    shap_uses_transformed = True
+
             feat_names = None
             if pre is not None:
                 try:
@@ -281,7 +368,6 @@ class FraudService:
                 except Exception:
                     feat_names = None
 
-            # fallback: если не смогли получить transformed names — показываем raw cols
             if not feat_names:
                 feat_names = cols
 
@@ -314,6 +400,10 @@ class FraudService:
                 preprocessor=pre,
                 estimator=est,
                 transformed_feature_names=feat_names,
+
+                shap_explainer=shap_explainer,
+                shap_uses_transformed=shap_uses_transformed,
+
                 fusion_external_model=fusion_model,
                 fusion_external_thresholds=fusion_thr,
                 fusion_external_weights=fusion_w,
@@ -345,21 +435,32 @@ class FraudService:
             and len(rows) <= self.settings.reasons_max_rows
         )
 
-        contrib = None
-        names = art.transformed_feature_names or art.expected_columns
+        shap_vals = None
+        shap_names = art.transformed_feature_names or art.expected_columns
 
-        if reasons_allowed and art.estimator is not None:
-            # 1) если есть preprocessor — transform, иначе пробуем raw X
+        if reasons_allowed and art.shap_explainer is not None:
             try:
                 X = _prepare_dataframe(rows, art.expected_columns)
+
+                # если есть препроцессор — объясняем уже transformed space
                 if art.preprocessor is not None and hasattr(art.preprocessor, "transform"):
                     Xt = art.preprocessor.transform(X)
-                    contrib = _try_contrib(art.estimator, Xt)
-                if contrib is None:
-                    # fallback: raw X (например LGBMClassifier без preprocessor)
-                    contrib = _try_contrib(art.estimator, X)
-            except Exception:
-                contrib = None
+                    # SHAP иногда не дружит со sparse — конвертим безопасно
+                    try:
+                        if hasattr(Xt, "toarray"):
+                            Xt_shap = Xt.toarray()
+                        else:
+                            Xt_shap = Xt
+                    except Exception:
+                        Xt_shap = Xt
+
+                    shap_vals = _shap_values_binary(art.shap_explainer, Xt_shap)
+                else:
+                    shap_vals = _shap_values_binary(art.shap_explainer, X)
+            except Exception as e:
+                self._last_error = f"SHAP error: {type(e).__name__}: {e}"
+                shap_vals = None
+                print(self._last_error)
 
         items: List[Dict[str, Any]] = []
         for i in range(len(rows)):
@@ -367,25 +468,22 @@ class FraudService:
             decision = _make_decision(score, art.thresholds_tabular)
 
             top_reasons = None
-            if reasons_allowed and contrib is not None:
-                row_contrib = np.asarray(contrib[i])
-                if row_contrib.ndim == 1 and row_contrib.shape[0] >= 2:
-                    contrib_wo_bias = row_contrib[:-1]
-                    # names может быть длиннее/короче — режем безопасно
-                    nn = min(len(names), len(contrib_wo_bias))
-                    pairs = list(zip(names[:nn], contrib_wo_bias[:nn]))
-                    pairs.sort(key=lambda x: abs(float(x[1])), reverse=True)
-                    pairs = pairs[: max(1, int(reasons_topk))]
+            if reasons_allowed and shap_vals is not None:
+                row_sv = np.asarray(shap_vals[i])  # теперь это точно 1D (n_features,)
+                nn = min(len(shap_names), len(row_sv))
+                pairs = list(zip(shap_names[:nn], row_sv[:nn]))
+                pairs.sort(key=lambda x: abs(float(x[1])), reverse=True)
+                pairs = pairs[: max(1, int(reasons_topk))]
 
-                    raw_row = rows[i] or {}
-                    top_reasons = [
-                        {
-                            "feature": str(feat),
-                            "contribution": float(c),
-                            "value": raw_row.get(feat) if feat in raw_row else None,
-                        }
-                        for feat, c in pairs
-                    ]
+                raw_row = rows[i] or {}
+                top_reasons = [
+                    {
+                        "feature": str(feat),
+                        "contribution": float(c),
+                        "value": _reason_value_from_raw(raw_row, str(feat)),
+                    }
+                    for feat, c in pairs
+                ]
 
             items.append({"risk_score": score, "decision": decision, "top_reasons": top_reasons})
 

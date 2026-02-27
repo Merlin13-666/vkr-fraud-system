@@ -32,7 +32,7 @@ class ApiSettings:
     # reasons
     enable_reasons: bool = True
     reasons_topk_default: int = 5
-    reasons_max_rows: int = 500
+    reasons_max_rows: int = 200
 
     # ops
     enable_metrics: bool = True
@@ -42,6 +42,12 @@ class ApiSettings:
     rate_limit_burst: float = 40.0
     predict_timeout_ms: int = 5000
     audit_max_events: int = 200
+
+    # SHAP
+    shap_background_rows: int = 256  # сколько строк брать для background (ускорение/стабильность)
+    shap_check_additivity: bool = False  # быстрее, обычно ок для дерева
+
+    cors_origins: str = ""
 
     @classmethod
     def from_env(cls) -> "ApiSettings":
@@ -97,6 +103,8 @@ class ApiSettings:
             rate_limit_burst=_get_float("FRAUD_API_RATE_LIMIT_BURST", cls.rate_limit_burst),
             predict_timeout_ms=_get_int("FRAUD_API_PREDICT_TIMEOUT_MS", cls.predict_timeout_ms),
             audit_max_events=_get_int("FRAUD_API_AUDIT_MAX_EVENTS", cls.audit_max_events),
+
+            cors_origins=os.getenv("FRAUD_API_CORS_ORIGINS", "")
         )
 
     def auth_enabled(self) -> bool:
