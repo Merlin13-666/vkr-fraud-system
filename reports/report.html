@@ -5,18 +5,24 @@
         <title>VKR Fraud System — Auto Report</title>
         
     <style>
-      body { font-family: Arial, sans-serif; margin: 24px; }
+      body { font-family: Arial, sans-serif; margin: 24px; max-width: 1200px; }
       h1, h2, h3 { margin-top: 22px; }
       .muted { color: #555; }
       .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 14px 0; }
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
       table { border-collapse: collapse; width: 100%; }
       th, td { border: 1px solid #ddd; padding: 6px 8px; }
-      th { background: #f7f7f7; }
+      th { background: #f7f7f7; position: sticky; top: 0; }
       img { max-width: 100%; height: auto; border: 1px solid #eee; border-radius: 10px; }
       code { background: #f3f3f3; padding: 2px 5px; border-radius: 6px; }
       .small { font-size: 12px; }
       .ok { color: #0a7; font-weight: bold; }
+      .warn { color: #b45309; font-weight: bold; }
+      .toc a { text-decoration: none; }
+      .toc li { margin: 4px 0; }
+      details > summary { cursor: pointer; font-weight: bold; margin: 6px 0; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .pill { display:inline-block; padding:2px 8px; border-radius: 999px; border: 1px solid #ddd; background:#fafafa; }
     </style>
     
       </head>
@@ -27,13 +33,26 @@
         </div>
 
         
-        <div class="card">
+    <div class="card toc">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#main_result">Main result</a></li>
+        <li><a href="#comparison">Model comparison</a></li>
+        <li><a href="#shap">SHAP interpretation</a></li>
+        <li><a href="#graph">Graph visualization</a></li>
+        <li><a href="#meta">Reproducibility / Metadata</a></li>
+      </ul>
+    </div>
+    
+
+        
+        <div class="card" id="main_result">
           <h2>Главный результат системы (для РПЗ)</h2>
           <div class="muted small">
             Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
             trained_on: <code>external_val</code>,
             used_gnn: <code>calibrated</code><br/>
-            metrics source: <a href="artifacts/evaluation/fusion_metrics_external.json">fusion_metrics_external.json</a>
+            metrics source: <a href="../artifacts/evaluation/fusion_metrics_external.json">fusion_metrics_external.json</a>
           </div>
           <div class="grid">
             <div>
@@ -49,14 +68,19 @@
               <span class="muted small">
                 constraints: max_fpr_deny=0.01 | max_review_share=0.1
               </span>
-              <div class="muted small">source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
+              <div class="muted small">source: <a href="../artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
             </div>
+          </div>
+
+          <div style="margin-top:10px;">
+            <span class="pill small">fusion weights</span>
+            <span class="small mono">w_tabular=0.996768, w_gnn=0.056532, bias=0.603574</span>
           </div>
         </div>
         
 
         
-    <div class='card'>
+    <div class='card' id='comparison'>
       <h2>Model comparison</h2>
       <div class='muted small'>
         Saved: <a href="tables/model_comparison.csv">model_comparison.csv</a>
@@ -264,7 +288,7 @@
           <div>t_review: <code>0.030575</code></div>
           <div>t_deny: <code>0.184445</code></div>
           <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
-          <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_tabular.json">thresholds_tabular.json</a></div>
+          <div class='muted small'>source: <a href="../artifacts/thresholds/thresholds_tabular.json">thresholds_tabular.json</a></div>
         </div>
         
         <div class='card'>
@@ -272,7 +296,7 @@
           <div>t_review: <code>0.048066</code></div>
           <div>t_deny: <code>0.275694</code></div>
           <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
-          <div class='muted small'>source: <a href="artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
+          <div class='muted small'>source: <a href="../artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
         </div>
         </div>
 
@@ -282,7 +306,7 @@
       
         <div class='card'>
           <h3>TABULAR decision zones (VAL)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_tabular_val.csv">decision_zones_tabular_val.csv</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_tabular_val.csv">decision_zones_tabular_val.csv</a></div>
           <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -326,7 +350,7 @@
       
         <div class='card'>
           <h3>TABULAR decision zones (TEST)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_tabular_test.csv">decision_zones_tabular_test.csv</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_tabular_test.csv">decision_zones_tabular_test.csv</a></div>
           <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -370,7 +394,7 @@
       
         <div class='card'>
           <h3>FUSION_EXTERNAL decision zones (VAL)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_fusion_external_val.csv">decision_zones_fusion_external_val.csv</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_fusion_external_val.csv">decision_zones_fusion_external_val.csv</a></div>
           <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -414,7 +438,7 @@
       
         <div class='card'>
           <h3>FUSION_EXTERNAL decision zones (TEST)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/decision_zones_fusion_external_test.csv">decision_zones_fusion_external_test.csv</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_fusion_external_test.csv">decision_zones_fusion_external_test.csv</a></div>
           <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
@@ -470,20 +494,20 @@
         <div class='grid'>
         <div class='card'>
           <h3>TABULAR cost (TEST)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/cost_tabular_test.json">cost_tabular_test.json</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/cost_tabular_test.json">cost_tabular_test.json</a></div>
           <div>avg_cost_per_tx: <code>2.459057</code></div>
           <div>total_cost: <code>255378.000</code></div>
         </div>
         
         <div class='card'>
           <h3>FUSION_EXTERNAL cost (TEST)</h3>
-          <div class='muted small'>source: <a href="artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
+          <div class='muted small'>source: <a href="../artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
           <div>avg_cost_per_tx: <code>2.516793</code></div>
           <div>total_cost: <code>261374.000</code></div>
         </div>
         </div>
 
-        <h2>Интерпретация (SHAP, табличная модель)</h2>
+        <h2 id='shap'>Интерпретация (SHAP, табличная модель)</h2>
 <div class='muted'>Глобальная важность признаков и их вклад в решение модели LightGBM. Для batch-predict доступна опция <code>--with-reasons</code>, которая добавляет <code>top_reasons</code> (top-k вкладов SHAP на транзакцию).</div>
 <div class='grid'>
 <div class='card'><h3>SHAP summary (bar)</h3><img src='assets/shap_summary_bar.png' /></div>
@@ -627,17 +651,77 @@
 <div class='card'>
 <h3>Пример output с причинами</h3>
 <div class='muted'>Файл содержит колонку <code>top_reasons</code> — JSON-массив из top-k признаков с их значениями и вкладом SHAP (положительный → повышает риск, отрицательный → снижает).</div>
-<div class='muted small'>example: <a href="artifacts/predict/test_tabular_with_reasons.parquet">test_tabular_with_reasons.parquet</a></div>
+<div class='muted small'>example: <a href="../artifacts/predict/test_tabular_with_reasons.parquet">test_tabular_with_reasons.parquet</a></div>
 </div>
+
         
-        <h2>Graph visualization</h2>
+        <div class="card" id="graph">
+          <h2>Graph visualization</h2>
+          <div class="muted small">file: <a href="assets/graph.html">assets/graph.html</a></div>
+          <p>
+            <a href="assets/graph.html" target="_blank">Open interactive graph (pyvis) in new tab</a>
+          </p>
+          <details>
+            <summary>Embed preview (iframe)</summary>
+            <iframe src="assets/graph.html" style="width:100%; height:850px; border:1px solid #eee; border-radius:10px;"></iframe>
+          </details>
+        </div>
         
+
         
-        <h2>Graph visualization</h2>
-        <p>
-          <a href="assets/graph.html" target="_blank">Open interactive graph (pyvis)</a>
-        </p>
-        
+    <div class="card">
+      <h2 id="meta">Reproducibility / Metadata</h2>
+      <div class="small muted">
+        generated_at: <span class="mono">2026-02-28 03:40:58</span><br/>
+        git_commit: <span class="mono">4b693a5</span><br/>
+        python: <span class="mono">3.11.9</span><br/>
+      </div>
+      <details>
+        <summary>pip freeze (first lines)</summary>
+        <pre class="mono small">aiohappyeyeballs==2.6.1
+aiohttp==3.13.3
+aiosignal==1.4.0
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.12.1
+asttokens==3.0.1
+attrs==25.4.0
+certifi==2026.1.4
+charset-normalizer==3.4.4
+click==8.3.1
+cloudpickle==3.1.2
+colorama==0.4.6
+contourpy==1.3.3
+cycler==0.12.1
+decorator==5.2.1
+executing==2.2.1
+fastapi==0.133.0
+filelock==3.20.0
+fonttools==4.61.1
+frozenlist==1.8.0
+fsspec==2025.12.0
+h11==0.16.0
+httptools==0.7.1
+idna==3.11
+ipython==9.10.0
+ipython_pygments_lexers==1.1.1
+jedi==0.19.2
+Jinja2==3.1.6
+joblib==1.5.3
+jsonpickle==4.1.1
+kiwisolver==1.4.9
+lightgbm==4.6.0
+llvmlite==0.46.0
+MarkupSafe==3.0.2
+matplotlib==3.10.8
+matplotlib-inline==0.2.1
+mpmath==1.3.0
+multidict==6.7.1
+networkx==3.6.1
+... (49 more)</pre>
+      </details>
+    </div>
+    
 
         <h2>Notes for РПЗ</h2>
         <div class="card">
