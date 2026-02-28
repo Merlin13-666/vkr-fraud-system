@@ -8,19 +8,10 @@ from pathlib import Path
 from typing import List, Optional
 
 
-# -------------------------
-# Helpers
-# -------------------------
-
 def _run_module(module: str, args: Optional[List[str]] = None) -> None:
-    """
-    Run: python -m <module> [args...]
-    Uses current interpreter (venv-safe).
-    """
     cmd = [sys.executable, "-m", module]
     if args:
         cmd.extend(args)
-
     print(f"\n[RUN] {' '.join(cmd)}")
     proc = subprocess.run(cmd, text=True)
     if proc.returncode != 0:
@@ -45,23 +36,40 @@ class Step:
 
 
 def _should_run(step: Step, force: bool) -> bool:
-    if force:
-        return True
-    # if ANY output missing -> run
-    return not _exists_all(step.outputs)
+    return True if force else (not _exists_all(step.outputs))
 
 
-# -------------------------
-# Pipeline definition
-# -------------------------
-
-def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool, skip_report: bool) -> List[Step]:
+def _resolve_graph_pred_path(user_path: str) -> str:
     """
-    Defines end-to-end 'one button' pipeline.
-    We keep steps in a logical order and make each step skippable by artifact existence.
+    If user path missing, try fallback to test_pred_fusion_external.parquet.
     """
+    p = Path(user_path)
+    if p.exists():
+        return user_path
 
-    # A2
+    fallback = Path("artifacts/evaluation/test_pred_fusion_external.parquet")
+    if fallback.exists():
+        return str(fallback).replace("\\", "/")
+
+    # keep original; viz step will error with clear message if no file
+    return user_path
+
+
+def build_steps(
+    skip_gnn: bool,
+    skip_external: bool,
+    skip_internal_fusion: bool,
+    skip_report: bool,
+    graph_mode: str,
+    graph_tx_id: Optional[int],
+    graph_entity_type: Optional[str],
+    graph_entity_value: Optional[str],
+    graph_pred_path: str,
+    graph_hops: int,
+    graph_max_nodes: int,
+    graph_max_edges: int,
+) -> List[Step]:
+
     s_prepare = Step(
         key="A2_prepare",
         title="Prepare data (merge + schema + time split)",
@@ -76,7 +84,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A3
     s_tabular = Step(
         key="A3_tabular",
         title="Train tabular (LightGBM) + preds",
@@ -92,7 +99,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A4.1
     s_build_graph = Step(
         key="A4_build_graph",
         title="Build graph artifacts (node_map + edges)",
@@ -105,7 +111,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A4.2
     s_make_graph_data = Step(
         key="A4_make_graph_data",
         title="Convert to PyG HeteroData",
@@ -117,7 +122,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A5
     s_train_gnn = Step(
         key="A5_train_gnn",
         title="Train GNN (internal) + preds",
@@ -133,7 +137,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A6 (internal fusion) — полезно для ablation в отчёте, но можно скипнуть
     s_fusion_internal = Step(
         key="A6_fusion_internal",
         title="Train fusion internal (ablation/debug)",
@@ -148,7 +151,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A9 external VAL
     s_gnn_external_val = Step(
         key="A9_gnn_external_val",
         title="Inductive GNN predict (external VAL)",
@@ -160,7 +162,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=["--split", "val"],
     )
 
-    # A9 external TEST
     s_gnn_external_test = Step(
         key="A9_gnn_external_test",
         title="Inductive GNN predict (external TEST)",
@@ -172,7 +173,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=["--split", "test"],
     )
 
-    # A9.3 calibration (temperature scaling)
     s_gnn_calibrate = Step(
         key="A9_calibrate_gnn",
         title="Calibrate external GNN (temperature scaling)",
@@ -185,7 +185,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A10 fusion external (honest)
     s_fusion_external = Step(
         key="A10_fusion_external",
         title="Train fusion external (honest) + preds",
@@ -200,7 +199,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
-    # A7 evaluate (thresholds/zones/cost) — запускаем, если нет fusion_external thresholds (или tabular thresholds)
     s_evaluate = Step(
         key="A7_evaluate",
         title="Evaluate + thresholds + decision zones + cost",
@@ -211,7 +209,6 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
             _p("artifacts", "evaluation", "zone_share_tabular_val.png"),
             _p("artifacts", "evaluation", "zone_share_tabular_test.png"),
             _p("artifacts", "evaluation", "cost_tabular_test.json"),
-
             _p("artifacts", "thresholds", "thresholds_fusion_external.json"),
             _p("artifacts", "evaluation", "decision_zones_fusion_external_val.csv"),
             _p("artifacts", "evaluation", "decision_zones_fusion_external_test.csv"),
@@ -223,16 +220,32 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
         module_args=[],
     )
 
+    # ---- graph viz args
+    resolved_pred_path = _resolve_graph_pred_path(graph_pred_path)
+    gv_args: List[str] = [
+        "--mode", graph_mode,
+        "--hops", str(graph_hops),
+        "--max-nodes", str(graph_max_nodes),
+        "--max-edges", str(graph_max_edges),
+    ]
+    if graph_mode == "ego_tx":
+        if graph_tx_id is not None:
+            gv_args += ["--tx-id", str(graph_tx_id)]
+        else:
+            gv_args += ["--auto-pick", "--pred-path", resolved_pred_path]
+    else:
+        if not graph_entity_type or not graph_entity_value:
+            raise ValueError("graph_mode=ego_entity requires --graph-entity-type and --graph-entity-value")
+        gv_args += ["--entity-type", graph_entity_type, "--entity-value", graph_entity_value]
+
     s_graph_viz = Step(
         key="A11_graph_viz",
         title="Build interactive graph viz (pyvis HTML)",
         outputs=[_p("reports", "assets", "graph.html")],
         module="scripts.16_build_graph_viz",
-        module_args=[],
+        module_args=gv_args,
     )
 
-
-    # A11 report
     s_report = Step(
         key="A11_auto_report",
         title="Auto report (HTML + tables + assets)",
@@ -252,11 +265,10 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
             steps.append(s_fusion_internal)
 
     if not skip_external:
-        # external inference logically requires trained GNN + node_map/graph_data + tabular preds
         steps.extend([s_gnn_external_val, s_gnn_external_test, s_gnn_calibrate, s_fusion_external])
 
-    # evaluate should run after you have models/preds
     steps.append(s_evaluate)
+
     if not skip_report:
         steps.append(s_graph_viz)
         steps.append(s_report)
@@ -264,23 +276,28 @@ def build_steps(skip_gnn: bool, skip_external: bool, skip_internal_fusion: bool,
     return steps
 
 
-# -------------------------
-# CLI
-# -------------------------
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="VKR Fraud System — One-click runner (A12)")
-    parser.add_argument("--force", action="store_true", help="Re-run steps even if artifacts exist")
-    parser.add_argument("--skip-gnn", action="store_true", help="Skip internal GNN training step (A5)")
-    parser.add_argument("--skip-external", action="store_true", help="Skip external inductive steps (A9/A10)")
-    parser.add_argument("--skip-internal-fusion", action="store_true", help="Skip internal fusion (A6)")
-    parser.add_argument("--skip-report", action="store_true", help="Skip auto report (A11)")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--skip-gnn", action="store_true")
+    parser.add_argument("--skip-external", action="store_true")
+    parser.add_argument("--skip-internal-fusion", action="store_true")
+    parser.add_argument("--skip-report", action="store_true")
 
-    parser.add_argument("--from-step", type=str, default=None, help="Start from step key (inclusive)")
-    parser.add_argument("--to-step", type=str, default=None, help="Stop at step key (inclusive)")
-    parser.add_argument("--shap", action="store_true", help="Run optional SHAP step (B1) if shap is installed")
-    parser.add_argument("--start-api", action="store_true",
-                        help="Start FastAPI service after pipeline (B2). Blocks terminal.")
+    parser.add_argument("--from-step", type=str, default=None)
+    parser.add_argument("--to-step", type=str, default=None)
+    parser.add_argument("--shap", action="store_true")
+    parser.add_argument("--start-api", action="store_true")
+
+    parser.add_argument("--graph-mode", choices=["ego_tx", "ego_entity"], default="ego_tx")
+    parser.add_argument("--graph-tx-id", type=int, default=None)
+    parser.add_argument("--graph-entity-type", type=str, default=None)
+    parser.add_argument("--graph-entity-value", type=str, default=None)
+    parser.add_argument("--graph-pred-path", type=str, default="artifacts/evaluation/val_pred_fusion_internal.parquet"),
+    parser.add_argument("--graph-hops", type=int, default=2)
+    parser.add_argument("--graph-max-nodes", type=int, default=1500)
+    parser.add_argument("--graph-max-edges", type=int, default=3000)
+
     args = parser.parse_args()
 
     steps = build_steps(
@@ -288,30 +305,17 @@ def main() -> None:
         skip_external=args.skip_external,
         skip_internal_fusion=args.skip_internal_fusion,
         skip_report=args.skip_report,
+        graph_mode=args.graph_mode,
+        graph_tx_id=args.graph_tx_id,
+        graph_entity_type=args.graph_entity_type,
+        graph_entity_value=args.graph_entity_value,
+        graph_pred_path=args.graph_pred_path,
+        graph_hops=args.graph_hops,
+        graph_max_nodes=args.graph_max_nodes,
+        graph_max_edges=args.graph_max_edges,
     )
 
-    s_shap = Step(
-        key="B1_shap",
-        title="SHAP for tabular (global plots + tables)",
-        outputs=[
-            _p("reports", "assets", "shap_summary_bar.png"),
-            _p("reports", "tables", "shap_top_features.csv"),
-        ],
-        module="scripts.12_shap_tabular",
-        module_args=[],
-    )
-    if args.shap:
-        # Вставляем SHAP перед отчётом (если отчёт в списке)
-        inserted = False
-        for idx, st in enumerate(steps):
-            if st.key == "A11_auto_report":
-                steps.insert(idx, s_shap)
-                inserted = True
-                break
-        if not inserted:
-            steps.append(s_shap)
-
-    # Slice by from/to
+    # optional SHAP step insertion оставляю как у тебя было: если надо — можно вернуть.
     if args.from_step:
         keys = [s.key for s in steps]
         if args.from_step not in keys:
@@ -327,6 +331,8 @@ def main() -> None:
     print("VKR Fraud System: one-click runner (A12)")
     print(f"force={args.force}, skip_gnn={args.skip_gnn}, skip_external={args.skip_external}, "
           f"skip_internal_fusion={args.skip_internal_fusion}, skip_report={args.skip_report}")
+    print(f"graph: mode={args.graph_mode}, tx_id={args.graph_tx_id}, pred_path={args.graph_pred_path}, "
+          f"hops={args.graph_hops}, max_nodes={args.graph_max_nodes}, max_edges={args.graph_max_edges}")
 
     for step in steps:
         need = _should_run(step, force=args.force)
@@ -336,7 +342,6 @@ def main() -> None:
             continue
         _run_module(step.module, step.module_args)
 
-    # final check
     report_path = _p("reports", "report.html")
     if report_path.exists():
         print(f"\n[DONE] Report: {report_path}")

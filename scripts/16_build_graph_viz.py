@@ -22,7 +22,7 @@ def _read_nodes(path: Path) -> pd.DataFrame:
     df = df.copy()
     df["entity_type"] = df["entity_type"].astype(str)
     df["entity_value"] = df["entity_value"].astype(str)
-    df["node_id"] = df["node_id"].astype("int64")
+    df["node_id"] = pd.to_numeric(df["node_id"], errors="coerce").astype("int64")
     return df
 
 
@@ -36,15 +36,12 @@ def _read_edges(path: Path) -> pd.DataFrame:
     df = df.copy()
     df["src_type"] = df["src_type"].astype(str)
     df["dst_type"] = df["dst_type"].astype(str)
-    # src_id = transaction_id (int)
     df["src_id"] = pd.to_numeric(df["src_id"], errors="coerce")
-    # dst_id = local node_id inside dst_type (int)
     df["dst_id"] = pd.to_numeric(df["dst_id"], errors="coerce")
     df = df.dropna(subset=["src_id", "dst_id"]).copy()
     df["src_id"] = df["src_id"].astype("int64")
     df["dst_id"] = df["dst_id"].astype("int64")
 
-    # keep useful columns if exist
     keep = ["src_type", "src_id", "dst_type", "dst_id"]
     for c in ["relation", "col"]:
         if c in df.columns:
@@ -61,30 +58,14 @@ def _read_tx_index(path: Path) -> pd.DataFrame:
 
     df = df.copy()
     df["transaction_id"] = pd.to_numeric(df["transaction_id"], errors="coerce")
-    df = df.dropna(subset=["transaction_id"]).copy()
+    df["tx_node_id"] = pd.to_numeric(df["tx_node_id"], errors="coerce")
+    df = df.dropna(subset=["transaction_id", "tx_node_id"]).copy()
     df["transaction_id"] = df["transaction_id"].astype("int64")
-    df["tx_node_id"] = pd.to_numeric(df["tx_node_id"], errors="coerce").astype("int64")
+    df["tx_node_id"] = df["tx_node_id"].astype("int64")
     return df
 
 
-def _pick_entity_local_id(nodes: pd.DataFrame, entity_type: str, entity_value: str) -> int:
-    m = (nodes["entity_type"] == str(entity_type)) & (nodes["entity_value"] == str(entity_value))
-    sub = nodes.loc[m, ["node_id"]]
-    if sub.empty:
-        sample = nodes[nodes["entity_type"] == str(entity_type)].head(8)["entity_value"].tolist()
-        raise RuntimeError(
-            f"entity not found: type={entity_type}, value={entity_value}. "
-            f"Examples for this type: {sample}"
-        )
-    return int(sub.iloc[0]["node_id"])
-
-
 def _format_entity_label(entity_type: str, entity_value: str, max_len: int = 26) -> str:
-    """
-    Лейбл делаем более "человеческим":
-    entity_value у тебя вида "card1::13926" / "P_emaildomain::gmail.com" и т.п.
-    Покажем правую часть после '::', а тип оставим цветом/формой.
-    """
     v = str(entity_value)
     if "::" in v:
         v = v.split("::", 1)[1]
@@ -124,15 +105,7 @@ def _bfs_nodes(adj: Dict[int, List[int]], start: int, hops: int, max_nodes: int)
     return visited
 
 
-def _build_global_offsets(
-    nodes: pd.DataFrame,
-    tx_index: pd.DataFrame,
-) -> Tuple[Dict[str, int], Dict[str, int]]:
-    """
-    Глобальные id = offset[type] + local_id
-    - transaction local_id = tx_node_id (0..N_tx-1)
-    - entity local_id = node_id внутри entity_type (0..N_type-1)
-    """
+def _build_global_offsets(nodes: pd.DataFrame, tx_index: pd.DataFrame) -> Tuple[Dict[str, int], Dict[str, int]]:
     counts: Dict[str, int] = {}
     counts["transaction"] = int(tx_index["tx_node_id"].max()) + 1 if len(tx_index) else 0
 
@@ -148,19 +121,14 @@ def _build_global_offsets(
 
     return offsets, counts
 
+
 def _apply_vis_options(net, options_js: str) -> None:
-    """
-    Совместимость между версиями pyvis:
-    - новые: net.set_options(str) работает
-    - старые/поломанные: net.options это dict и set_options падает -> кладём dict напрямую
-    """
     try:
         net.set_options(options_js)
         return
     except Exception:
         pass
 
-    # fallback: пытаемся распарсить "var options = {...};" или просто "{...}"
     s = options_js.strip()
     if s.startswith("var options"):
         s = s.split("=", 1)[1].strip()
@@ -175,24 +143,94 @@ def _apply_vis_options(net, options_js: str) -> None:
             "Try upgrading pyvis or check options string format."
         ) from e
 
+
+def _pick_score_col(cols: List[str]) -> Optional[str]:
+    cols_set = set(cols)
+    candidates = [
+        "p_fusion_external",
+        "p_fusion_internal",
+        "p_fusion",
+        "p_tabular",
+        "p_gnn",
+        "score",
+        "pred",
+        "proba",
+        "risk",
+        "risk_score",
+    ]
+    for c in candidates:
+        if c in cols_set:
+            return c
+    # fallback: any p_*
+    p_cols = [c for c in cols if isinstance(c, str) and c.startswith("p_")]
+    if p_cols:
+        p_cols_sorted = sorted(p_cols, key=lambda x: (len(x), x), reverse=True)
+        return p_cols_sorted[0]
+    return None
+
+
+def _pick_tx_from_preds(pred_path: Path, allowed_tx_ids: Set[int]) -> int:
+    """
+    ВАЖНО: выбираем tx только из тех, которые реально есть в tx_index (т.е. в графе).
+    Если пересечение пустое — fallback на первую tx из tx_index, чтобы пайплайн не падал.
+    """
+    if not pred_path.exists():
+        raise RuntimeError(f"pred parquet not found: {pred_path}")
+
+    df = pd.read_parquet(pred_path)
+    cols = list(df.columns)
+
+    # tx col
+    tx_candidates = ["transaction_id", "TransactionID", "tx_id"]
+    tx_col = next((c for c in tx_candidates if c in df.columns), None)
+    if tx_col is None:
+        raise RuntimeError(f"Cannot auto-pick tx: tx column not found. Have columns: {cols[:50]}")
+
+    score_col = _pick_score_col(cols)
+    if score_col is None:
+        raise RuntimeError(f"Cannot auto-pick tx: score column not found. Have columns: {cols[:50]}")
+
+    df2 = df[[tx_col, score_col]].copy()
+    df2[tx_col] = pd.to_numeric(df2[tx_col], errors="coerce")
+    df2[score_col] = pd.to_numeric(df2[score_col], errors="coerce")
+    df2 = df2.dropna(subset=[tx_col, score_col]).copy()
+    if df2.empty:
+        # fallback: берем любую tx из графа
+        return int(next(iter(allowed_tx_ids)))
+
+    df2[tx_col] = df2[tx_col].astype("int64")
+
+    # INTERSECTION with graph
+    df2 = df2[df2[tx_col].isin(list(allowed_tx_ids))]
+    if df2.empty:
+        # нет пересечения preds и graph -> fallback, но НЕ падаем
+        return int(next(iter(allowed_tx_ids)))
+
+    df2 = df2.sort_values(score_col, ascending=False)
+    return int(df2.iloc[0][tx_col])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="A11+: Interactive graph visualization (pyvis)")
+
     parser.add_argument("--node-map", default="artifacts/graph/node_map.parquet")
     parser.add_argument("--edges", default="artifacts/graph/edges.parquet")
     parser.add_argument("--tx-index", default="artifacts/graph/tx_index.parquet")
-
     parser.add_argument("--out", default="reports/assets/graph.html")
 
-    parser.add_argument("--mode", choices=["ego_tx", "ego_entity", "ego_global"], default="ego_tx")
-    parser.add_argument("--tx-id", type=int, default=None, help="transaction_id as integer (e.g. 2987000)")
-    parser.add_argument("--entity-type", type=str, default=None, help="card/email/device/addr")
-    parser.add_argument("--entity-value", type=str, default=None, help='e.g. "card1::13926"')
+    parser.add_argument("--mode", choices=["ego_tx", "ego_entity"], default="ego_tx")
+    parser.add_argument("--tx-id", type=int, default=None)
+    parser.add_argument("--entity-type", type=str, default=None)
+    parser.add_argument("--entity-value", type=str, default=None)
+
+    parser.add_argument("--auto-pick", action="store_true")
+    parser.add_argument("--pred-path", default="artifacts/evaluation/val_pred_fusion_external.parquet")
 
     parser.add_argument("--hops", type=int, default=2)
-    parser.add_argument("--max-nodes", type=int, default=10000)
-    parser.add_argument("--max-edges", type=int, default=10000)
+    parser.add_argument("--max-nodes", type=int, default=1500)
+    parser.add_argument("--max-edges", type=int, default=3000)
 
-    parser.add_argument("--show-physics", action="store_true", help="Show physics settings panel (optional)")
+    parser.add_argument("--show-physics", action="store_true")
     args = parser.parse_args()
 
     node_path = Path(args.node_map)
@@ -205,14 +243,12 @@ def main() -> None:
     edges = _read_edges(edge_path)
     tx_index = _read_tx_index(tx_path)
 
-    # maps for tx
     txid_to_txnode = dict(zip(tx_index["transaction_id"].values, tx_index["tx_node_id"].values))
     txnode_to_txid = dict(zip(tx_index["tx_node_id"].values, tx_index["transaction_id"].values))
+    allowed_tx_ids: Set[int] = set(int(x) for x in tx_index["transaction_id"].tolist())
 
-    # global id offsets
     offsets, counts = _build_global_offsets(nodes, tx_index)
 
-    # entity local maps
     ent_local_lookup = nodes.set_index(["entity_type", "node_id"])["entity_value"].to_dict()
     ent_value_lookup = nodes.set_index(["entity_type", "entity_value"])["node_id"].to_dict()
 
@@ -223,8 +259,6 @@ def main() -> None:
         return offsets[str(entity_type)] + int(local_id)
 
     def global_type_and_local(gid: int) -> Tuple[str, int]:
-        # find type by offsets ranges
-        # offsets are increasing; do a simple scan (small number of types)
         items = sorted(offsets.items(), key=lambda x: x[1])
         for i, (t, off) in enumerate(items):
             nxt_off = items[i + 1][1] if i + 1 < len(items) else 10**18
@@ -233,10 +267,10 @@ def main() -> None:
         return "unknown", gid
 
     # ---- Build global undirected edge list: transaction(tx_node_id) <-> entity(dst_type, dst_id)
-    global_edges: List[Tuple[int, int, str]] = []  # (u,v,edge_label)
+    global_edges: List[Tuple[int, int, str]] = []
     for r in edges.itertuples(index=False):
         if r.src_type != "transaction":
-            continue  # по твоим артефактам src_type всегда transaction, но оставим безопасно
+            continue
         tx_id = int(r.src_id)
         tx_node = txid_to_txnode.get(tx_id)
         if tx_node is None:
@@ -245,10 +279,8 @@ def main() -> None:
         u = g_tx(int(tx_node))
         v = g_ent(str(r.dst_type), int(r.dst_id))
 
-        # label ребра в тултипе: какая колонка связала
         col = getattr(r, "col", None)
         rel = getattr(r, "relation", None)
-        el = ""
         if col is not None and str(col):
             el = f"{r.dst_type} via {col}"
         elif rel is not None and str(rel):
@@ -258,24 +290,29 @@ def main() -> None:
 
         global_edges.append((u, v, el))
 
-    # adjacency for BFS
     adj: Dict[int, List[int]] = {}
     for u, v, _ in global_edges:
         adj.setdefault(u, []).append(v)
         adj.setdefault(v, []).append(u)
 
-    # ---- choose start node (global id)
+    # ---- choose start node
     start_gid: Optional[int] = None
     start_title = ""
 
     if args.mode == "ego_tx":
-        if args.tx_id is None:
-            raise RuntimeError("--mode ego_tx requires --tx-id (int), e.g. --tx-id 2987000")
-        tx_id = int(args.tx_id)
+        tx_id = args.tx_id
+        if tx_id is None and args.auto_pick:
+            tx_id = _pick_tx_from_preds(Path(args.pred_path), allowed_tx_ids)
+        if tx_id is None:
+            raise RuntimeError("--mode ego_tx requires --tx-id, or use --auto-pick")
+
+        tx_id = int(tx_id)
         tx_node = txid_to_txnode.get(tx_id)
         if tx_node is None:
+            # теперь это почти не должно случаться, но оставим safety
             examples = list(txid_to_txnode.keys())[:10]
             raise RuntimeError(f"transaction_id={tx_id} not found in tx_index. Example tx_id: {examples}")
+
         start_gid = g_tx(int(tx_node))
         start_title = f"TX ego-graph: transaction_id={tx_id} (tx_node_id={int(tx_node)})"
 
@@ -291,27 +328,19 @@ def main() -> None:
         start_gid = g_ent(et, int(local_id))
         start_title = f"Entity ego-graph: {et} / {ev} (node_id={int(local_id)})"
 
-    elif args.mode == "ego_global":
-        raise RuntimeError("--mode ego_global is reserved (not exposed here). Use ego_tx or ego_entity.")
-
     if start_gid is None:
         raise RuntimeError("Cannot determine start node (check args).")
 
-    # ---- BFS subgraph on global ids
     keep = _bfs_nodes(adj, start=int(start_gid), hops=int(args.hops), max_nodes=int(args.max_nodes))
-
-    # filter edges inside keep
     e_keep: List[Tuple[int, int, str]] = [(u, v, lab) for (u, v, lab) in global_edges if u in keep and v in keep]
     if len(e_keep) > int(args.max_edges):
         e_keep = e_keep[: int(args.max_edges)]
 
-    # degrees for size (within full global graph)
     deg: Dict[int, int] = {}
     for u, v, _ in global_edges:
         deg[u] = deg.get(u, 0) + 1
         deg[v] = deg.get(v, 0) + 1
 
-    # ---- pyvis render
     try:
         from pyvis.network import Network
     except Exception as e:
@@ -323,7 +352,6 @@ def main() -> None:
 
     net = Network(height="850px", width="100%", bgcolor="#ffffff", font_color="#111111", directed=False, notebook=False)
 
-    # options: стабильная физика + hover
     _apply_vis_options(net, """var options = {
       "physics": {
         "enabled": true,
@@ -347,7 +375,6 @@ def main() -> None:
       "edges": {"smooth": false}
     };""")
 
-    # add nodes with meaningful labels
     for gid in sorted(keep):
         t, local = global_type_and_local(int(gid))
         is_center = int(gid) == int(start_gid)
@@ -355,19 +382,23 @@ def main() -> None:
         if t == "transaction":
             tx_id = txnode_to_txid.get(int(local))
             label = f"tx:{tx_id}" if tx_id is not None else f"tx_node:{local}"
-            title = f"{start_title if is_center else ''}\n\n" \
-                    f"type=transaction\n" \
-                    f"transaction_id={tx_id}\n" \
-                    f"tx_node_id={local}\n" \
-                    f"deg={deg.get(int(gid), 0)}"
+            title = (
+                f"{start_title if is_center else ''}\n\n"
+                f"type=transaction\n"
+                f"transaction_id={tx_id}\n"
+                f"tx_node_id={local}\n"
+                f"deg={deg.get(int(gid), 0)}"
+            )
         else:
             ev = ent_local_lookup.get((t, int(local)), f"{t}::{local}")
             label = _format_entity_label(t, ev, max_len=26)
-            title = f"{start_title if is_center else ''}\n\n" \
-                    f"type={t}\n" \
-                    f"value={ev}\n" \
-                    f"node_id={local}\n" \
-                    f"deg={deg.get(int(gid), 0)}"
+            title = (
+                f"{start_title if is_center else ''}\n\n"
+                f"type={t}\n"
+                f"value={ev}\n"
+                f"node_id={local}\n"
+                f"deg={deg.get(int(gid), 0)}"
+            )
 
         st = _type_style(t)
         size = 10 + min(28, deg.get(int(gid), 0) // 2)
@@ -384,21 +415,17 @@ def main() -> None:
             group=t,
         )
 
-    # add edges with labels (tooltip)
     for u, v, lab in e_keep:
-        if int(u) == int(start_gid) or int(v) == int(start_gid):
-            net.add_edge(str(u), str(v), width=2, title=lab)
-        else:
-            net.add_edge(str(u), str(v), width=1, title=lab)
+        w = 2 if (int(u) == int(start_gid) or int(v) == int(start_gid)) else 1
+        net.add_edge(str(u), str(v), width=w, title=lab)
 
     if args.show_physics:
         net.show_buttons(filter_=["physics"])
 
     net.write_html(str(out_path))
 
-    # --- postprocess: freeze physics after stabilization
+    # freeze physics after stabilization
     html = out_path.read_text(encoding="utf-8")
-
     if "network = new vis.Network(container, data, options);" in html:
         html = html.replace(
             "network = new vis.Network(container, data, options);",
@@ -418,6 +445,20 @@ def main() -> None:
             1,
         )
 
+    legend = """
+    <div style="position:fixed; right:18px; top:18px; z-index:9999;
+                background:#fff; border:1px solid #eee; border-radius:12px;
+                padding:12px; font-family:Arial; font-size:12px; color:#111;">
+      <div style="font-weight:bold; margin-bottom:6px;">Legend</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#4C8BF5;margin-right:6px;"></span>transaction</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#00A889;margin-right:6px;"></span>card*</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#F4B400;margin-right:6px;"></span>*email*</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#DB4437;margin-right:6px;"></span>*device*</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#546E7A;margin-right:6px;"></span>addr*</div>
+      <div style="margin-top:8px;color:#555;">Tip: hover nodes/edges for details.</div>
+    </div>
+    """
+    html = html.replace("</body>", f"{legend}\n</body>", 1)
     out_path.write_text(html, encoding="utf-8")
 
     print(f"[A11+] Saved: {out_path.as_posix()}")

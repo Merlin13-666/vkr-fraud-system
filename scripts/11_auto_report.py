@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 
@@ -46,14 +50,48 @@ def _df_to_html(df: pd.DataFrame, max_rows: int = 50) -> str:
     return d.to_html(index=False, escape=False)
 
 
-def _norm(p: Path) -> str:
+def _norm_path(p: Path) -> str:
     return str(p).replace("\\", "/")
 
 
-def _link(path: Path, label: Optional[str] = None, base: Path = Path("reports")) -> str:
-    rel = _norm(Path(path).resolve().relative_to(base.resolve())) if base.resolve() in Path(path).resolve().parents else _norm(Path(path))
-    txt = label or rel
-    return f'<a href="{rel}">{txt}</a>'
+def _rel_href(target: Path, report_dir: Path) -> str:
+    """
+    Делает правильный href относительно reports/report.html.
+    Работает и для artifacts/* (будет ../artifacts/...)
+    """
+    try:
+        rel = os.path.relpath(target.resolve(), start=report_dir.resolve())
+    except Exception:
+        rel = str(target)
+    return rel.replace("\\", "/")
+
+
+def _link(target: Path, label: Optional[str] = None, report_dir: Path = Path("reports")) -> str:
+    href = _rel_href(target, report_dir=report_dir)
+    txt = label or href
+    return f'<a href="{href}">{txt}</a>'
+
+
+def _git_commit_short() -> Optional[str]:
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def _pip_freeze_short(max_lines: int = 40) -> str:
+    """
+    Не идеальная, но полезная штука для ВКР: фиксируем окружение.
+    """
+    try:
+        out = subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True)
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if len(lines) > max_lines:
+            lines = lines[:max_lines] + [f"... ({len(lines) - max_lines} more)"]
+        return "\n".join(lines)
+    except Exception:
+        return "pip freeze unavailable"
 
 
 # =========================
@@ -79,7 +117,7 @@ def _extract_metrics_tabular(eval_dir: Path) -> Optional[ModelBlock]:
         title="Tabular (LightGBM)",
         val_metrics=j.get("val", {}),
         test_metrics=j.get("test", {}),
-        extra={"source": _norm(path)},
+        extra={"source": _norm_path(path)},
     )
 
 
@@ -94,7 +132,7 @@ def _extract_metrics_gnn_internal(eval_dir: Path) -> Optional[ModelBlock]:
         val_metrics=j.get("val", {}),
         test_metrics=j.get("test", {}),
         extra={
-            "source": _norm(path),
+            "source": _norm_path(path),
             "pos_weight": (j.get("class_balance") or {}).get("pos_weight"),
         },
     )
@@ -115,7 +153,7 @@ def _extract_metrics_fusion_internal(eval_dir: Path) -> Optional[ModelBlock]:
         title="Fusion (internal, for ablation only)",
         val_metrics=val,
         test_metrics=test,
-        extra={"source": _norm(path)},
+        extra={"source": _norm_path(path)},
     )
 
 
@@ -132,8 +170,8 @@ def _extract_metrics_gnn_external(eval_dir: Path) -> Optional[ModelBlock]:
         val_metrics=jv,
         test_metrics=jt,
         extra={
-            "source_val": _norm(val_path),
-            "source_test": _norm(test_path),
+            "source_val": _norm_path(val_path),
+            "source_test": _norm_path(test_path),
         },
     )
 
@@ -149,7 +187,7 @@ def _extract_metrics_fusion_external(eval_dir: Path) -> Optional[ModelBlock]:
         val_metrics=j.get("val_external", {}),
         test_metrics=j.get("test_external", {}),
         extra={
-            "source": _norm(path),
+            "source": _norm_path(path),
             "weights": j.get("fusion_weights", {}),
             "trained_on": j.get("trained_on", "external_val"),
             "used_gnn": j.get("used_gnn", "calibrated"),
@@ -196,6 +234,7 @@ def _build_comparison_table(blocks: List[ModelBlock]) -> pd.DataFrame:
 def main() -> None:
     eval_dir = Path("artifacts/evaluation")
     thr_dir = Path("artifacts/thresholds")
+
     reports_dir = Path("reports")
     assets_dir = reports_dir / "assets"
     tables_dir = reports_dir / "tables"
@@ -283,7 +322,6 @@ def main() -> None:
     pred_with_reasons_path = Path("artifacts/predict/test_tabular_with_reasons.parquet")
     pred_with_reasons_exists = pred_with_reasons_path.exists()
 
-
     # ---------
     # Titles
     # ---------
@@ -305,23 +343,51 @@ def main() -> None:
     # ---------
     css = """
     <style>
-      body { font-family: Arial, sans-serif; margin: 24px; }
+      body { font-family: Arial, sans-serif; margin: 24px; max-width: 1200px; }
       h1, h2, h3 { margin-top: 22px; }
       .muted { color: #555; }
       .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 14px 0; }
       .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
       table { border-collapse: collapse; width: 100%; }
       th, td { border: 1px solid #ddd; padding: 6px 8px; }
-      th { background: #f7f7f7; }
+      th { background: #f7f7f7; position: sticky; top: 0; }
       img { max-width: 100%; height: auto; border: 1px solid #eee; border-radius: 10px; }
       code { background: #f3f3f3; padding: 2px 5px; border-radius: 6px; }
       .small { font-size: 12px; }
       .ok { color: #0a7; font-weight: bold; }
+      .warn { color: #b45309; font-weight: bold; }
+      .toc a { text-decoration: none; }
+      .toc li { margin: 4px 0; }
+      details > summary { cursor: pointer; font-weight: bold; margin: 6px 0; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .pill { display:inline-block; padding:2px 8px; border-radius: 999px; border: 1px solid #ddd; background:#fafafa; }
     </style>
     """
 
     def _img(tag: str) -> str:
-        return f'<img src="assets/{tag}" alt="{tag}"/>'
+        return f'<img src="{_rel_href(assets_dir / tag, report_dir=reports_dir)}" alt="{tag}"/>'
+
+    # ---------
+    # Header/meta block (VKR+)
+    # ---------
+    gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    git_hash = _git_commit_short() or "n/a"
+    freeze = _pip_freeze_short()
+
+    meta_html = f"""
+    <div class="card">
+      <h2 id="meta">Reproducibility / Metadata</h2>
+      <div class="small muted">
+        generated_at: <span class="mono">{gen_time}</span><br/>
+        git_commit: <span class="mono">{git_hash}</span><br/>
+        python: <span class="mono">{sys.version.split()[0]}</span><br/>
+      </div>
+      <details>
+        <summary>pip freeze (first lines)</summary>
+        <pre class="mono small">{freeze}</pre>
+      </details>
+    </div>
+    """
 
     # ---------
     # Main system summary (fusion_external)
@@ -330,14 +396,15 @@ def main() -> None:
     main_summary_html = ""
     if fusion_ext is not None:
         t_fus = thresholds_fus or {}
+        w = fusion_ext.extra.get("weights") or {}
         main_summary_html = f"""
-        <div class="card">
+        <div class="card" id="main_result">
           <h2>Главный результат системы (для РПЗ)</h2>
           <div class="muted small">
             Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
             trained_on: <code>{fusion_ext.extra.get("trained_on", "external_val")}</code>,
             used_gnn: <code>{fusion_ext.extra.get("used_gnn", "calibrated")}</code><br/>
-            metrics source: {_link(eval_dir / "fusion_metrics_external.json", "fusion_metrics_external.json")}
+            metrics source: {_link(eval_dir / "fusion_metrics_external.json", "fusion_metrics_external.json", report_dir=reports_dir)}
           </div>
           <div class="grid">
             <div>
@@ -353,8 +420,13 @@ def main() -> None:
               <span class="muted small">
                 constraints: max_fpr_deny={t_fus.get("max_fpr_deny")} | max_review_share={t_fus.get("max_review_share")}
               </span>
-              <div class="muted small">source: {_link(thr_dir / "thresholds_fusion_external.json", "thresholds_fusion_external.json")}</div>
+              <div class="muted small">source: {_link(thr_dir / "thresholds_fusion_external.json", "thresholds_fusion_external.json", report_dir=reports_dir)}</div>
             </div>
+          </div>
+
+          <div style="margin-top:10px;">
+            <span class="pill small">fusion weights</span>
+            <span class="small mono">w_tabular={_fmt(w.get("w_tabular"), nd=6)}, w_gnn={_fmt(w.get("w_gnn"), nd=6)}, bias={_fmt(w.get("bias"), nd=6)}</span>
           </div>
         </div>
         """
@@ -362,7 +434,7 @@ def main() -> None:
     # ---------
     # Model blocks section
     # ---------
-    blocks_html = []
+    blocks_html_list = []
     for b in blocks:
         extra_bits = []
         if b.key == "fusion_external":
@@ -375,7 +447,7 @@ def main() -> None:
         if extra_bits:
             extra_line = " | ".join(extra_bits)
 
-        blocks_html.append(
+        blocks_html_list.append(
             f"""
             <div class="card">
               <h3>{b.title}</h3>
@@ -400,7 +472,7 @@ def main() -> None:
             </div>
             """
         )
-    blocks_html = "\n".join(blocks_html)
+    blocks_html = "\n".join(blocks_html_list)
 
     # ---------
     # Figures sections
@@ -437,14 +509,14 @@ def main() -> None:
     # ---------
     def _thr_block(name: str, thr: Optional[Dict[str, Any]], src_path: Path) -> str:
         if not thr:
-            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm(src_path)}</div></div>"
+            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm_path(src_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{name}</h3>
           <div>t_review: <code>{_fmt(thr.get("t_review"))}</code></div>
           <div>t_deny: <code>{_fmt(thr.get("t_deny"))}</code></div>
           <div class='muted small'>constraints: max_fpr_deny={thr.get("max_fpr_deny")} | max_review_share={thr.get("max_review_share")}</div>
-          <div class='muted small'>source: {_link(src_path, src_path.name)}</div>
+          <div class='muted small'>source: {_link(src_path, src_path.name, report_dir=reports_dir)}</div>
         </div>
         """
 
@@ -460,11 +532,11 @@ def main() -> None:
     # ---------
     def _dz_block(title: str, df: Optional[pd.DataFrame], file_path: Path) -> str:
         if df is None:
-            return f"<div class='card'><h3>{title}</h3><div class='muted'>Not found: {_norm(file_path)}</div></div>"
+            return f"<div class='card'><h3>{title}</h3><div class='muted'>Not found: {_norm_path(file_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{title}</h3>
-          <div class='muted small'>source: {_link(file_path, file_path.name)}</div>
+          <div class='muted small'>source: {_link(file_path, file_path.name, report_dir=reports_dir)}</div>
           {_df_to_html(df, max_rows=10)}
         </div>
         """
@@ -483,11 +555,11 @@ def main() -> None:
     # ---------
     def _cost_block(name: str, c: Optional[Dict[str, Any]], src_path: Path) -> str:
         if not c:
-            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm(src_path)}</div></div>"
+            return f"<div class='card'><h3>{name}</h3><div class='muted'>Not found: {_norm_path(src_path)}</div></div>"
         return f"""
         <div class='card'>
           <h3>{name}</h3>
-          <div class='muted small'>source: {_link(src_path, src_path.name)}</div>
+          <div class='muted small'>source: {_link(src_path, src_path.name, report_dir=reports_dir)}</div>
           <div>avg_cost_per_tx: <code>{_fmt(c.get("avg_cost_per_tx"), nd=6)}</code></div>
           <div>total_cost: <code>{_fmt(c.get("total_cost"), nd=3)}</code></div>
         </div>
@@ -504,10 +576,10 @@ def main() -> None:
     # Comparison table block
     # ---------
     comp_html = f"""
-    <div class='card'>
+    <div class='card' id='comparison'>
       <h2>Model comparison</h2>
       <div class='muted small'>
-        Saved: {_link(comp_path, "model_comparison.csv")}
+        Saved: {_link(comp_path, "model_comparison.csv", report_dir=reports_dir)}
         &nbsp;|&nbsp; Sort: <code>fusion_external</code> first, then by <code>TEST PR-AUC desc</code>, <code>TEST logloss asc</code>.
       </div>
       {_df_to_html(comp, max_rows=50)}
@@ -515,12 +587,12 @@ def main() -> None:
     """
 
     # ---------
-    # SHAP section block (this was missing from insertion earlier)
+    # SHAP section
     # ---------
     shap_html = ""
     if shap_bar.exists():
         shap_html_parts: List[str] = []
-        shap_html_parts.append("<h2>Интерпретация (SHAP, табличная модель)</h2>")
+        shap_html_parts.append("<h2 id='shap'>Интерпретация (SHAP, табличная модель)</h2>")
         shap_html_parts.append(
             "<div class='muted'>Глобальная важность признаков и их вклад в решение модели LightGBM. "
             "Для batch-predict доступна опция <code>--with-reasons</code>, которая добавляет <code>top_reasons</code> (top-k вкладов SHAP на транзакцию).</div>"
@@ -528,11 +600,11 @@ def main() -> None:
 
         shap_html_parts.append("<div class='grid'>")
         shap_html_parts.append(
-            "<div class='card'><h3>SHAP summary (bar)</h3><img src='assets/shap_summary_bar.png' /></div>"
+            f"<div class='card'><h3>SHAP summary (bar)</h3><img src='{_rel_href(shap_bar, report_dir=reports_dir)}' /></div>"
         )
         if shap_bees.exists():
             shap_html_parts.append(
-                "<div class='card'><h3>SHAP summary (beeswarm)</h3><img src='assets/shap_summary_beeswarm.png' /></div>"
+                f"<div class='card'><h3>SHAP summary (beeswarm)</h3><img src='{_rel_href(shap_bees, report_dir=reports_dir)}' /></div>"
             )
         shap_html_parts.append("</div>")
 
@@ -543,11 +615,11 @@ def main() -> None:
                 shap_html_parts.append("<h3>Top features (mean |SHAP|)</h3>")
                 shap_html_parts.append(_df_to_html(df_shap, max_rows=30))
                 shap_html_parts.append(
-                    f"<div class='muted small'>source: {_link(shap_csv, 'shap_top_features.csv')}</div>"
+                    f"<div class='muted small'>source: {_link(shap_csv, 'shap_top_features.csv', report_dir=reports_dir)}</div>"
                 )
                 if shap_meta.exists():
                     shap_html_parts.append(
-                        f"<div class='muted small'>meta: {_link(shap_meta, 'shap_meta.json')}</div>"
+                        f"<div class='muted small'>meta: {_link(shap_meta, 'shap_meta.json', report_dir=reports_dir)}</div>"
                     )
                 shap_html_parts.append("</div>")
             except Exception:
@@ -561,27 +633,55 @@ def main() -> None:
                 "с их значениями и вкладом SHAP (положительный → повышает риск, отрицательный → снижает).</div>"
             )
             shap_html_parts.append(
-                f"<div class='muted small'>example: {_link(pred_with_reasons_path, pred_with_reasons_path.name)}</div>"
+                f"<div class='muted small'>example: {_link(pred_with_reasons_path, pred_with_reasons_path.name, report_dir=reports_dir)}</div>"
             )
             shap_html_parts.append("</div>")
 
         shap_html = "\n".join(shap_html_parts)
+    else:
+        shap_html = "<div class='card'><h2 id='shap'>Интерпретация (SHAP)</h2><div class='muted'>SHAP artifacts not found.</div></div>"
 
+    # ---------
+    # Graph section (FIX: no duplicated <h2>)
+    # ---------
     graph_html_path = assets_dir / "graph.html"
-    graph_section = ""
     if graph_html_path.exists():
-        graph_section = """
-        <h2>Graph visualization</h2>
-        <p>
-          <a href="assets/graph.html" target="_blank">Open interactive graph (pyvis)</a>
-        </p>
+        graph_section = f"""
+        <div class="card" id="graph">
+          <h2>Graph visualization</h2>
+          <div class="muted small">file: {_link(graph_html_path, "assets/graph.html", report_dir=reports_dir)}</div>
+          <p>
+            <a href="{_rel_href(graph_html_path, report_dir=reports_dir)}" target="_blank">Open interactive graph (pyvis) in new tab</a>
+          </p>
+          <details>
+            <summary>Embed preview (iframe)</summary>
+            <iframe src="{_rel_href(graph_html_path, report_dir=reports_dir)}" style="width:100%; height:850px; border:1px solid #eee; border-radius:10px;"></iframe>
+          </details>
+        </div>
         """
     else:
         graph_section = """
-        <h2>Graph visualization</h2>
-        <div class="muted">Graph HTML is not generated. Install <code>pyvis</code> and run step <code>A11_graph_viz</code>.</div>
+        <div class="card" id="graph">
+          <h2>Graph visualization</h2>
+          <div class="muted">Graph HTML is not generated. Install <code>pyvis</code> and run step <code>A11_graph_viz</code>.</div>
+        </div>
         """
 
+    # ---------
+    # TOC
+    # ---------
+    toc = """
+    <div class="card toc">
+      <h2>Contents</h2>
+      <ul>
+        <li><a href="#main_result">Main result</a></li>
+        <li><a href="#comparison">Model comparison</a></li>
+        <li><a href="#shap">SHAP interpretation</a></li>
+        <li><a href="#graph">Graph visualization</a></li>
+        <li><a href="#meta">Reproducibility / Metadata</a></li>
+      </ul>
+    </div>
+    """
 
     # ---------
     # Page
@@ -598,6 +698,8 @@ def main() -> None:
         <div class="muted">
           This report is generated from saved artifacts (no training). It is suitable for РПЗ / презентация.
         </div>
+
+        {toc}
 
         {main_summary_html}
 
@@ -626,10 +728,10 @@ def main() -> None:
         {cost_html}
 
         {shap_html}
-        
-        <h2>Graph visualization</h2>
-        
+
         {graph_section}
+
+        {meta_html}
 
         <h2>Notes for РПЗ</h2>
         <div class="card">
@@ -659,6 +761,8 @@ def main() -> None:
         print("[A11] No figures copied (some PNGs may be missing).")
     if shap_bar.exists():
         print("[A11] SHAP section: included (reports/assets/shap_*.png found).")
+    if graph_html_path.exists():
+        print("[A11] Graph section: included (reports/assets/graph.html found).")
     print("[A11] Done.")
 
 
