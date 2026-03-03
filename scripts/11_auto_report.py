@@ -285,6 +285,11 @@ def main() -> None:
         ("zone_share_tabular_test.png", "zone_share_tabular_test.png"),
         ("zone_share_fusion_external_val.png", "zone_share_fusion_external_val.png"),
         ("zone_share_fusion_external_test.png", "zone_share_fusion_external_test.png"),
+
+        ("graph_degree_tx_hist.png", "graph_degree_tx_hist.png"),
+        ("graph_edges_by_dst_type.png", "graph_edges_by_dst_type.png"),
+        ("graph_top_entities_degree.png", "graph_top_entities_degree.png"),
+        ("graph_components_hist.png", "graph_components_hist.png"),
     ]
 
     copied_figs: List[str] = []
@@ -336,6 +341,11 @@ def main() -> None:
         "zone_share_tabular_test.png": "Доли зон: Tabular — TEST",
         "zone_share_fusion_external_val.png": "Доли зон: Fusion external — VAL",
         "zone_share_fusion_external_test.png": "Доли зон: Fusion external — TEST",
+
+        "graph_degree_tx_hist.png": "Graph degree distribution (transactions)",
+        "graph_edges_by_dst_type.png": "Edges by destination node type",
+        "graph_top_entities_degree.png": "Top-20 entity nodes by degree",
+        "graph_components_hist.png": "Connected component sizes (TX nodes)",
     }
 
     # ---------
@@ -642,6 +652,110 @@ def main() -> None:
         shap_html = "<div class='card'><h2 id='shap'>Интерпретация (SHAP)</h2><div class='muted'>SHAP artifacts not found.</div></div>"
 
     # ---------
+    # Graph statistics (A4.3)
+    # ---------
+    graph_stats_path = Path("artifacts/graph/graph_stats.json")
+    graph_stats = _read_json(graph_stats_path) or {}
+
+    # картинки уже будут в reports/assets после figures_to_copy
+    graph_stat_figs = [
+        "graph_edges_by_dst_type.png",
+        "graph_degree_tx_hist.png",
+        "graph_top_entities_degree.png",
+        "graph_components_hist.png",
+    ]
+
+    def _kv_table(title: str, d: Any) -> str:
+        if not isinstance(d, dict) or not d:
+            return f"<div class='muted small'>{title}: n/a</div>"
+        rows = []
+        for k, v in d.items():
+            rows.append(f"<tr><td><code>{k}</code></td><td><code>{_fmt(v)}</code></td></tr>")
+        return f"""
+        <div class="card">
+          <h3>{title}</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody>
+              {''.join(rows)}
+            </tbody>
+          </table>
+        </div>
+        """
+
+    # фактическая структура graph_stats.json:
+    # nodes.counts_by_type
+    # edges.by_dst_type / edges.by_col / edges.total
+    # degrees.tx_degree_summary / degrees.isolated_tx_share
+    # components.components_count_tx / components.largest_component_share_tx
+
+    counts_by_type = (graph_stats.get("nodes") or {}).get("counts_by_type") or {}
+    edges_by_dst_type = (graph_stats.get("edges") or {}).get("by_dst_type") or {}
+    edges_by_col = (graph_stats.get("edges") or {}).get("by_col") or {}
+    tx_deg = (graph_stats.get("degrees") or {}).get("tx_degree_summary") or {}
+
+    components = graph_stats.get("components") or {}
+    components_count = components.get("components_count_tx")
+    largest_share = components.get("largest_component_share_tx")
+    isolated_tx_share = (graph_stats.get("degrees") or {}).get("isolated_tx_share")
+
+    def _dict_to_two_col_table(title: str, d: dict) -> str:
+        if not isinstance(d, dict) or not d:
+            return f"<div class='card'><h3>{title}</h3><div class='muted small'>n/a</div></div>"
+        rows = "".join([f"<tr><td><code>{k}</code></td><td><code>{v}</code></td></tr>" for k, v in d.items()])
+        return f"""
+        <div class="card">
+          <h3>{title}</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody>{rows}</tbody>
+          </table>
+        </div>
+        """
+
+    # fallback на твой текущий формат из консоли/JSON (если ключи названы иначе)
+    if components_count is None:
+        components_count = (graph_stats.get("components") or {}).get("count")
+    if largest_share is None:
+        largest_share = (graph_stats.get("components") or {}).get("largest_share")
+
+    figs_html = []
+    for f in graph_stat_figs:
+        if f in copied_figs:
+            title = FIG_TITLES.get(f, f)
+            figs_html.append(f"<div class='card'><h3>{title}</h3>{_img(f)}</div>")
+    figs_html = "\n".join(figs_html) if figs_html else "<div class='muted'>No graph stat figures found.</div>"
+
+    graph_stats_html = f"""
+    <div class="card" id="graph_stats">
+      <h2>Graph statistics (A4.3)</h2>
+      <div class="muted small">
+        source: {_link(graph_stats_path, "artifacts/graph/graph_stats.json", report_dir=reports_dir)}
+      </div>
+
+      <div class="grid">
+        {_dict_to_two_col_table("Nodes: |V| by type", counts_by_type)}
+        {_dict_to_two_col_table("Edges: |E| by dst_type", edges_by_dst_type)}
+        {_dict_to_two_col_table("Edges: |E| by column", edges_by_col)}
+        {_dict_to_two_col_table("TX degree summary", tx_deg)}
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Connected components (TX)</h3>
+          <div>isolated_tx_share: <code>{_fmt(isolated_tx_share)}</code></div>
+          <div>components_count_tx: <code>{_fmt(components_count)}</code></div>
+          <div>largest_component_share_tx: <code>{_fmt(largest_share)}</code></div>
+        </div>
+      </div>
+
+      <h3>Figures</h3>
+      <div class="grid">
+        {figs_html}
+      </div>
+    </div>
+    """
+    # ---------
     # Graph section (FIX: no duplicated <h2>)
     # ---------
     graph_html_path = assets_dir / "graph.html"
@@ -677,6 +791,7 @@ def main() -> None:
         <li><a href="#main_result">Main result</a></li>
         <li><a href="#comparison">Model comparison</a></li>
         <li><a href="#shap">SHAP interpretation</a></li>
+        <li><a href="#graph_stats">Graph statistics</a></li>
         <li><a href="#graph">Graph visualization</a></li>
         <li><a href="#meta">Reproducibility / Metadata</a></li>
       </ul>
@@ -728,6 +843,8 @@ def main() -> None:
         {cost_html}
 
         {shap_html}
+
+        {graph_stats_html}
 
         {graph_section}
 

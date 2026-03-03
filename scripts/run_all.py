@@ -220,6 +220,20 @@ def build_steps(
         module_args=[],
     )
 
+    s_graph_stats = Step(
+        key="A4_graph_stats",
+        title="Graph topology stats (A4.3)",
+        outputs=[
+            _p("artifacts", "graph", "graph_stats.json"),
+            _p("artifacts", "evaluation", "graph_degree_tx_hist.png"),
+            _p("artifacts", "evaluation", "graph_edges_by_dst_type.png"),
+            _p("artifacts", "evaluation", "graph_top_entities_degree.png"),
+            _p("artifacts", "evaluation", "graph_components_hist.png"),
+        ],
+        module="scripts.17_graph_stats",
+        module_args=[],
+    )
+
     # ---- graph viz args
     resolved_pred_path = _resolve_graph_pred_path(graph_pred_path)
     gv_args: List[str] = [
@@ -257,7 +271,7 @@ def build_steps(
         module_args=[],
     )
 
-    steps: List[Step] = [s_prepare, s_tabular, s_build_graph, s_make_graph_data]
+    steps: List[Step] = [s_prepare, s_tabular, s_build_graph, s_make_graph_data, s_graph_stats]
 
     if not skip_gnn:
         steps.append(s_train_gnn)

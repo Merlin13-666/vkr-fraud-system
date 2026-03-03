@@ -39,6 +39,7 @@
         <li><a href="#main_result">Main result</a></li>
         <li><a href="#comparison">Model comparison</a></li>
         <li><a href="#shap">SHAP interpretation</a></li>
+        <li><a href="#graph_stats">Graph statistics</a></li>
         <li><a href="#graph">Graph visualization</a></li>
         <li><a href="#meta">Reproducibility / Metadata</a></li>
       </ul>
@@ -655,6 +656,71 @@
 </div>
 
         
+    <div class="card" id="graph_stats">
+      <h2>Graph statistics (A4.3)</h2>
+      <div class="muted small">
+        source: <a href="../artifacts/graph/graph_stats.json">artifacts/graph/graph_stats.json</a>
+      </div>
+
+      <div class="grid">
+        
+        <div class="card">
+          <h3>Nodes: |V| by type</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody><tr><td><code>transaction</code></td><td><code>311553</code></td></tr><tr><td><code>card</code></td><td><code>2900</code></td></tr><tr><td><code>device</code></td><td><code>335</code></td></tr><tr><td><code>email</code></td><td><code>118</code></td></tr><tr><td><code>addr</code></td><td><code>106</code></td></tr></tbody>
+          </table>
+        </div>
+        
+        
+        <div class="card">
+          <h3>Edges: |E| by dst_type</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody><tr><td><code>email</code></td><td><code>623083</code></td></tr><tr><td><code>addr</code></td><td><code>622477</code></td></tr><tr><td><code>device</code></td><td><code>619903</code></td></tr><tr><td><code>card</code></td><td><code>287084</code></td></tr></tbody>
+          </table>
+        </div>
+        
+        
+        <div class="card">
+          <h3>Edges: |E| by column</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody><tr><td><code>P_emaildomain</code></td><td><code>311553</code></td></tr><tr><td><code>DeviceType</code></td><td><code>311553</code></td></tr><tr><td><code>R_emaildomain</code></td><td><code>311530</code></td></tr><tr><td><code>addr2</code></td><td><code>311394</code></td></tr><tr><td><code>addr1</code></td><td><code>311083</code></td></tr><tr><td><code>DeviceInfo</code></td><td><code>308350</code></td></tr><tr><td><code>card1</code></td><td><code>287084</code></td></tr></tbody>
+          </table>
+        </div>
+        
+        
+        <div class="card">
+          <h3>TX degree summary</h3>
+          <table>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody><tr><td><code>count</code></td><td><code>311553.0</code></td></tr><tr><td><code>mean</code></td><td><code>6.909087699364153</code></td></tr><tr><td><code>median</code></td><td><code>7.0</code></td></tr><tr><td><code>p95</code></td><td><code>7.0</code></td></tr><tr><td><code>max</code></td><td><code>7.0</code></td></tr></tbody>
+          </table>
+        </div>
+        
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Connected components (TX)</h3>
+          <div>isolated_tx_share: <code>0.000000</code></div>
+          <div>components_count_tx: <code>1.000000</code></div>
+          <div>largest_component_share_tx: <code>1.000000</code></div>
+        </div>
+      </div>
+
+      <h3>Figures</h3>
+      <div class="grid">
+        <div class='card'><h3>Edges by destination node type</h3><img src="assets/graph_edges_by_dst_type.png" alt="graph_edges_by_dst_type.png"/></div>
+<div class='card'><h3>Graph degree distribution (transactions)</h3><img src="assets/graph_degree_tx_hist.png" alt="graph_degree_tx_hist.png"/></div>
+<div class='card'><h3>Top-20 entity nodes by degree</h3><img src="assets/graph_top_entities_degree.png" alt="graph_top_entities_degree.png"/></div>
+<div class='card'><h3>Connected component sizes (TX nodes)</h3><img src="assets/graph_components_hist.png" alt="graph_components_hist.png"/></div>
+      </div>
+    </div>
+    
+
+        
         <div class="card" id="graph">
           <h2>Graph visualization</h2>
           <div class="muted small">file: <a href="assets/graph.html">assets/graph.html</a></div>
@@ -672,8 +738,8 @@
     <div class="card">
       <h2 id="meta">Reproducibility / Metadata</h2>
       <div class="small muted">
-        generated_at: <span class="mono">2026-02-28 03:40:58</span><br/>
-        git_commit: <span class="mono">4b693a5</span><br/>
+        generated_at: <span class="mono">2026-03-03 21:26:49</span><br/>
+        git_commit: <span class="mono">ee513b3</span><br/>
         python: <span class="mono">3.11.9</span><br/>
       </div>
       <details>
