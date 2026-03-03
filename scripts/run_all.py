@@ -5,7 +5,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 
 def _run_module(module: str, args: Optional[List[str]] = None) -> None:
@@ -40,26 +40,16 @@ def _should_run(step: Step, force: bool) -> bool:
 
 
 def _resolve_graph_pred_path(user_path: str) -> str:
-    """
-    If user path missing, try fallback to test_pred_fusion_external.parquet.
-    """
     p = Path(user_path)
     if p.exists():
         return user_path
-
     fallback = Path("artifacts/evaluation/test_pred_fusion_external.parquet")
     if fallback.exists():
         return str(fallback).replace("\\", "/")
-
-    # keep original; viz step will error with clear message if no file
     return user_path
 
 
 def build_steps(
-    skip_gnn: bool,
-    skip_external: bool,
-    skip_internal_fusion: bool,
-    skip_report: bool,
     graph_mode: str,
     graph_tx_id: Optional[int],
     graph_entity_type: Optional[str],
@@ -69,7 +59,6 @@ def build_steps(
     graph_max_nodes: int,
     graph_max_edges: int,
 ) -> List[Step]:
-
     s_prepare = Step(
         key="A2_prepare",
         title="Prepare data (merge + schema + time split)",
@@ -114,11 +103,36 @@ def build_steps(
     s_make_graph_data = Step(
         key="A4_make_graph_data",
         title="Convert to PyG HeteroData",
-        outputs=[
-            _p("artifacts", "graph", "graph_data.pt"),
-            _p("artifacts", "graph", "tx_index.parquet"),
-        ],
+        outputs=[_p("artifacts", "graph", "graph_data.pt"), _p("artifacts", "graph", "tx_index.parquet")],
         module="scripts.03_make_graph_data",
+        module_args=[],
+    )
+
+    s_graph_stats = Step(
+        key="A4_graph_stats",
+        title="Graph topology stats (A4.3)",
+        outputs=[
+            _p("artifacts", "graph", "graph_stats.json"),
+            _p("artifacts", "evaluation", "graph_degree_tx_hist.png"),
+            _p("artifacts", "evaluation", "graph_edges_by_dst_type.png"),
+            _p("artifacts", "evaluation", "graph_top_entities_degree.png"),
+            _p("artifacts", "evaluation", "graph_components_hist.png"),
+        ],
+        module="scripts.17_graph_stats",
+        module_args=[],
+    )
+
+    s_graph_metrics_baseline = Step(
+        key="A6_1_graph_metrics_baseline",
+        title="Graph-metrics baseline (A6.1)",
+        outputs=[
+            _p("artifacts", "evaluation", "graph_metrics_baseline_metrics.json"),
+            _p("artifacts", "evaluation", "pr_curve_graph_metrics.png"),
+            _p("artifacts", "evaluation", "val_pred_graph_metrics.parquet"),
+            _p("artifacts", "evaluation", "test_pred_graph_metrics.parquet"),
+            _p("artifacts", "evaluation", "graph_metrics_feature_importance.png"),
+        ],
+        module="scripts.18_train_graph_metrics_baseline",
         module_args=[],
     )
 
@@ -154,10 +168,7 @@ def build_steps(
     s_gnn_external_val = Step(
         key="A9_gnn_external_val",
         title="Inductive GNN predict (external VAL)",
-        outputs=[
-            _p("artifacts", "evaluation", "val_pred_gnn_external.parquet"),
-            _p("artifacts", "evaluation", "gnn_external_metrics_val.json"),
-        ],
+        outputs=[_p("artifacts", "evaluation", "val_pred_gnn_external.parquet"), _p("artifacts", "evaluation", "gnn_external_metrics_val.json")],
         module="scripts.08_predict_gnn_external",
         module_args=["--split", "val"],
     )
@@ -165,10 +176,7 @@ def build_steps(
     s_gnn_external_test = Step(
         key="A9_gnn_external_test",
         title="Inductive GNN predict (external TEST)",
-        outputs=[
-            _p("artifacts", "evaluation", "test_pred_gnn_external.parquet"),
-            _p("artifacts", "evaluation", "gnn_external_metrics_test.json"),
-        ],
+        outputs=[_p("artifacts", "evaluation", "test_pred_gnn_external.parquet"), _p("artifacts", "evaluation", "gnn_external_metrics_test.json")],
         module="scripts.08_predict_gnn_external",
         module_args=["--split", "test"],
     )
@@ -220,28 +228,9 @@ def build_steps(
         module_args=[],
     )
 
-    s_graph_stats = Step(
-        key="A4_graph_stats",
-        title="Graph topology stats (A4.3)",
-        outputs=[
-            _p("artifacts", "graph", "graph_stats.json"),
-            _p("artifacts", "evaluation", "graph_degree_tx_hist.png"),
-            _p("artifacts", "evaluation", "graph_edges_by_dst_type.png"),
-            _p("artifacts", "evaluation", "graph_top_entities_degree.png"),
-            _p("artifacts", "evaluation", "graph_components_hist.png"),
-        ],
-        module="scripts.17_graph_stats",
-        module_args=[],
-    )
-
-    # ---- graph viz args
+    # graph viz args
     resolved_pred_path = _resolve_graph_pred_path(graph_pred_path)
-    gv_args: List[str] = [
-        "--mode", graph_mode,
-        "--hops", str(graph_hops),
-        "--max-nodes", str(graph_max_nodes),
-        "--max-edges", str(graph_max_edges),
-    ]
+    gv_args: List[str] = ["--mode", graph_mode, "--hops", str(graph_hops), "--max-nodes", str(graph_max_nodes), "--max-edges", str(graph_max_edges)]
     if graph_mode == "ego_tx":
         if graph_tx_id is not None:
             gv_args += ["--tx-id", str(graph_tx_id)]
@@ -263,51 +252,45 @@ def build_steps(
     s_report = Step(
         key="A11_auto_report",
         title="Auto report (HTML + tables + assets)",
-        outputs=[
-            _p("reports", "report.html"),
-            _p("reports", "tables", "model_comparison.csv"),
-        ],
+        outputs=[_p("reports", "report.html"), _p("reports", "tables", "model_comparison.csv")],
         module="scripts.11_auto_report",
         module_args=[],
     )
 
-    steps: List[Step] = [s_prepare, s_tabular, s_build_graph, s_make_graph_data, s_graph_stats]
-
-    if not skip_gnn:
-        steps.append(s_train_gnn)
-        if not skip_internal_fusion:
-            steps.append(s_fusion_internal)
-
-    if not skip_external:
-        steps.extend([s_gnn_external_val, s_gnn_external_test, s_gnn_calibrate, s_fusion_external])
-
-    steps.append(s_evaluate)
-
-    if not skip_report:
-        steps.append(s_graph_viz)
-        steps.append(s_report)
-
-    return steps
+    return [
+        s_prepare,
+        s_tabular,
+        s_build_graph,
+        s_make_graph_data,
+        s_graph_stats,
+        s_graph_metrics_baseline,
+        s_train_gnn,
+        s_fusion_internal,
+        s_gnn_external_val,
+        s_gnn_external_test,
+        s_gnn_calibrate,
+        s_fusion_external,
+        s_evaluate,
+        s_graph_viz,
+        s_report,
+    ]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="VKR Fraud System — One-click runner (A12)")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--skip-gnn", action="store_true")
-    parser.add_argument("--skip-external", action="store_true")
-    parser.add_argument("--skip-internal-fusion", action="store_true")
-    parser.add_argument("--skip-report", action="store_true")
+
+    parser.add_argument("--only-report", action="store_true", help="Run only A11_graph_viz + A11_auto_report (expects artifacts exist)")
+    parser.add_argument("--only-graph-metrics", action="store_true", help="Run only A6.1 graph-metrics baseline (expects A4 artifacts exist)")
 
     parser.add_argument("--from-step", type=str, default=None)
     parser.add_argument("--to-step", type=str, default=None)
-    parser.add_argument("--shap", action="store_true")
-    parser.add_argument("--start-api", action="store_true")
 
     parser.add_argument("--graph-mode", choices=["ego_tx", "ego_entity"], default="ego_tx")
     parser.add_argument("--graph-tx-id", type=int, default=None)
     parser.add_argument("--graph-entity-type", type=str, default=None)
     parser.add_argument("--graph-entity-value", type=str, default=None)
-    parser.add_argument("--graph-pred-path", type=str, default="artifacts/evaluation/val_pred_fusion_internal.parquet"),
+    parser.add_argument("--graph-pred-path", type=str, default="artifacts/evaluation/val_pred_fusion_internal.parquet")
     parser.add_argument("--graph-hops", type=int, default=2)
     parser.add_argument("--graph-max-nodes", type=int, default=1500)
     parser.add_argument("--graph-max-edges", type=int, default=3000)
@@ -315,10 +298,6 @@ def main() -> None:
     args = parser.parse_args()
 
     steps = build_steps(
-        skip_gnn=args.skip_gnn,
-        skip_external=args.skip_external,
-        skip_internal_fusion=args.skip_internal_fusion,
-        skip_report=args.skip_report,
         graph_mode=args.graph_mode,
         graph_tx_id=args.graph_tx_id,
         graph_entity_type=args.graph_entity_type,
@@ -329,7 +308,12 @@ def main() -> None:
         graph_max_edges=args.graph_max_edges,
     )
 
-    # optional SHAP step insertion оставляю как у тебя было: если надо — можно вернуть.
+    if args.only_graph_metrics:
+        steps = [s for s in steps if s.key == "A6_1_graph_metrics_baseline"]
+
+    if args.only_report:
+        steps = [s for s in steps if s.key in {"A11_graph_viz", "A11_auto_report"}]
+
     if args.from_step:
         keys = [s.key for s in steps]
         if args.from_step not in keys:
@@ -343,27 +327,30 @@ def main() -> None:
         steps = steps[: keys.index(args.to_step) + 1]
 
     print("VKR Fraud System: one-click runner (A12)")
-    print(f"force={args.force}, skip_gnn={args.skip_gnn}, skip_external={args.skip_external}, "
-          f"skip_internal_fusion={args.skip_internal_fusion}, skip_report={args.skip_report}")
-    print(f"graph: mode={args.graph_mode}, tx_id={args.graph_tx_id}, pred_path={args.graph_pred_path}, "
-          f"hops={args.graph_hops}, max_nodes={args.graph_max_nodes}, max_edges={args.graph_max_edges}")
+    print(f"force={args.force}")
+    print(f"graph: mode={args.graph_mode}, tx_id={args.graph_tx_id}, pred_path={args.graph_pred_path}, hops={args.graph_hops}")
+
+    results: Dict[str, str] = {}
 
     for step in steps:
         need = _should_run(step, force=args.force)
         status = "RUN" if need else "SKIP"
         print(f"\n[{status}] {step.key}: {step.title}")
         if not need:
+            results[step.key] = "SKIPPED"
             continue
         _run_module(step.module, step.module_args)
+        results[step.key] = "OK"
+
+    print("\n[SUMMARY]")
+    for k in [s.key for s in steps]:
+        print(f"  {k}: {results.get(k, 'N/A')}")
 
     report_path = _p("reports", "report.html")
     if report_path.exists():
         print(f"\n[DONE] Report: {report_path}")
     else:
         print("\n[DONE] Pipeline finished (report not generated).")
-
-    if args.start_api:
-        _run_module("scripts.13_serve_api", [])
 
 
 if __name__ == "__main__":

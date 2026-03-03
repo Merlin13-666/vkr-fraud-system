@@ -17,57 +17,55 @@
       code { background: #f3f3f3; padding: 2px 5px; border-radius: 6px; }
       .small { font-size: 12px; }
       .ok { color: #0a7; font-weight: bold; }
-      .warn { color: #b45309; font-weight: bold; }
-      .toc a { text-decoration: none; }
-      .toc li { margin: 4px 0; }
       details > summary { cursor: pointer; font-weight: bold; margin: 6px 0; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .pill { display:inline-block; padding:2px 8px; border-radius: 999px; border: 1px solid #ddd; background:#fafafa; }
+      .toc a { text-decoration: none; }
+      .toc li { margin: 4px 0; }
     </style>
     
       </head>
       <body>
         <h1>VKR Fraud System — Auto Report (A11)</h1>
         <div class="muted">
-          This report is generated from saved artifacts (no training). It is suitable for РПЗ / презентация.
+          Отчёт собирается из сохранённых артефактов (без переобучения) и подходит для РПЗ/презентации.
         </div>
 
         
     <div class="card toc">
-      <h2>Contents</h2>
+      <h2>Содержание</h2>
       <ul>
-        <li><a href="#main_result">Main result</a></li>
-        <li><a href="#comparison">Model comparison</a></li>
-        <li><a href="#shap">SHAP interpretation</a></li>
-        <li><a href="#graph_stats">Graph statistics</a></li>
-        <li><a href="#graph">Graph visualization</a></li>
-        <li><a href="#meta">Reproducibility / Metadata</a></li>
+        <li><a href="#main_result">Главный результат</a></li>
+        <li><a href="#data">Данные и разбиение</a></li>
+        <li><a href="#comparison">Сравнение моделей</a></li>
+        <li><a href="#graph">Визуализация графа</a></li>
+        <li><a href="#meta">Воспроизводимость</a></li>
       </ul>
     </div>
     
 
         
         <div class="card" id="main_result">
-          <h2>Главный результат системы (для РПЗ)</h2>
-          <div class="muted small">
-            Main mode: <code>fusion_external</code> (честный режим, future split).<br/>
-            trained_on: <code>external_val</code>,
-            used_gnn: <code>calibrated</code><br/>
-            metrics source: <a href="../artifacts/evaluation/fusion_metrics_external.json">fusion_metrics_external.json</a>
+          <h2>Главный результат (для РПЗ / защиты)</h2>
+          <div class="muted">
+            Основной режим системы — <code>fusion_external</code>: гибрид Tabular + GNN с честной оценкой на future split
+            (обучение на external VAL, тестирование на external TEST).
           </div>
+
           <div class="grid">
             <div>
-              <b>TEST</b><br/>
-              logloss: <code class="ok">0.089611</code><br/>
-              PR-AUC: <code class="ok">0.517021</code><br/>
-              ROC-AUC: <code class="ok">0.903330</code>
+              <b>Качество на TEST</b><br/>
+              logloss: <code class="ok">0.089437</code><br/>
+              PR-AUC: <code class="ok">0.518235</code><br/>
+              ROC-AUC: <code class="ok">0.904008</code>
+              <div class="muted small">metrics: <a href="../artifacts/evaluation/fusion_metrics_external.json">fusion_metrics_external.json</a></div>
             </div>
             <div>
-              <b>Thresholds</b><br/>
-              t_review: <code>0.048066</code><br/>
-              t_deny: <code>0.275694</code><br/>
+              <b>Политика порогов</b><br/>
+              t_review: <code>0.048109</code><br/>
+              t_deny: <code>0.275901</code><br/>
               <span class="muted small">
-                constraints: max_fpr_deny=0.01 | max_review_share=0.1
+                ограничения: max_fpr_deny=0.01 | max_review_share=0.1
               </span>
               <div class="muted small">source: <a href="../artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
             </div>
@@ -75,17 +73,49 @@
 
           <div style="margin-top:10px;">
             <span class="pill small">fusion weights</span>
-            <span class="small mono">w_tabular=0.996768, w_gnn=0.056532, bias=0.603574</span>
+            <span class="small mono">w_tabular=0.996504, w_gnn=0.057107, bias=0.604151</span>
+          </div>
+
+          <div class="muted small" style="margin-top:8px;">
+            Комментарий для ВКР: веса fusion отражают вклад источников сигналов; в реальной системе они могут
+            переобучаться/перекалибровываться по дрейфу данных.
+          </div>
+        </div>
+        
+
+        
+        <div class="card" id="data">
+          <h2>Данные и разбиение</h2>
+          <div class="muted">
+            Используется временное разбиение (future split): train → val → test по росту времени транзакций.
+            Это снижает риск утечки и ближе к реальной эксплуатации антифрод-системы.
+          </div>
+          <div class="grid">
+            <div>
+              <b>Размеры</b><br/>
+              train: <code>None</code><br/>
+              val: <code>None</code><br/>
+              test: <code>None</code>
+            </div>
+            <div>
+              <b>Fraud rate</b><br/>
+              train: <code>0.000000</code><br/>
+              val: <code>0.000000</code><br/>
+              test: <code>0.000000</code>
+            </div>
+          </div>
+          <div class="muted small">
+            source: <a href="../data/splits/split_info.json">data/splits/split_info.json</a>
           </div>
         </div>
         
 
         
     <div class='card' id='comparison'>
-      <h2>Model comparison</h2>
+      <h2>Сравнение моделей</h2>
       <div class='muted small'>
-        Saved: <a href="tables/model_comparison.csv">model_comparison.csv</a>
-        &nbsp;|&nbsp; Sort: <code>fusion_external</code> first, then by <code>TEST PR-AUC desc</code>, <code>TEST logloss asc</code>.
+        Таблица сохранена: <a href="tables/model_comparison.csv">model_comparison.csv</a>.
+        Сортировка: основной режим <code>fusion_external</code> сверху, затем по <code>TEST PR-AUC</code> и <code>TEST logloss</code>.
       </div>
       <table border="1" class="dataframe">
   <thead>
@@ -103,17 +133,17 @@
   <tbody>
     <tr>
       <td>fusion_external</td>
-      <td>Fusion (external honest, trained on external VAL, tested on external TEST)</td>
-      <td>0.095330</td>
-      <td>0.589802</td>
-      <td>0.910829</td>
-      <td>0.089611</td>
-      <td>0.517021</td>
-      <td>0.903330</td>
+      <td>Гибридная модель (Tabular + GNN), честный режим (future split)</td>
+      <td>0.095324</td>
+      <td>0.589855</td>
+      <td>0.910823</td>
+      <td>0.089437</td>
+      <td>0.518235</td>
+      <td>0.904008</td>
     </tr>
     <tr>
       <td>fusion_internal</td>
-      <td>Fusion (internal, for ablation only)</td>
+      <td>Fusion (internal, только для абляции)</td>
       <td>0.062345</td>
       <td>0.840253</td>
       <td>0.968756</td>
@@ -133,7 +163,7 @@
     </tr>
     <tr>
       <td>gnn_internal</td>
-      <td>GNN (internal split inside train graph)</td>
+      <td>GNN (internal split внутри train-графа, только для абляции)</td>
       <td>0.255080</td>
       <td>0.383348</td>
       <td>0.804521</td>
@@ -143,39 +173,46 @@
     </tr>
     <tr>
       <td>gnn_external</td>
-      <td>GNN (external inductive, future split)</td>
-      <td>0.252821</td>
-      <td>0.219409</td>
-      <td>0.751259</td>
-      <td>0.248088</td>
-      <td>0.190163</td>
-      <td>0.701042</td>
+      <td>GNN (индуктивно, future split)</td>
+      <td>0.252660</td>
+      <td>0.220032</td>
+      <td>0.751364</td>
+      <td>0.241534</td>
+      <td>0.195484</td>
+      <td>0.712946</td>
+    </tr>
+    <tr>
+      <td>graph_metrics</td>
+      <td>Graph-metrics baseline (контрольная модель без GNN)</td>
+      <td>0.160862</td>
+      <td>0.133289</td>
+      <td>0.730922</td>
+      <td>0.142755</td>
+      <td>0.109965</td>
+      <td>0.705191</td>
     </tr>
   </tbody>
 </table>
     </div>
     
 
-        <h2>Per-model metrics</h2>
+        <h2>Метрики по моделям</h2>
         
             <div class="card">
-              <h3>Fusion (external honest, trained on external VAL, tested on external TEST)</h3>
-              <div class="muted small">
-                key: <code>fusion_external</code>
-                &nbsp;|&nbsp;trained_on=external_val | used_gnn=calibrated
-              </div>
+              <h3>Гибридная модель (Tabular + GNN), честный режим (future split)</h3>
+              <div class="muted small">key: <code>fusion_external</code> | trained_on=external_val | used_gnn=calibrated</div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.095330</code><br/>
-                  PR-AUC: <code>0.589802</code><br/>
-                  ROC-AUC: <code>0.910829</code>
+                  logloss: <code>0.095324</code><br/>
+                  PR-AUC: <code>0.589855</code><br/>
+                  ROC-AUC: <code>0.910823</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.089611</code><br/>
-                  PR-AUC: <code>0.517021</code><br/>
-                  ROC-AUC: <code>0.903330</code>
+                  logloss: <code>0.089437</code><br/>
+                  PR-AUC: <code>0.518235</code><br/>
+                  ROC-AUC: <code>0.904008</code>
                 </div>
               </div>
             </div>
@@ -183,10 +220,7 @@
 
             <div class="card">
               <h3>Tabular (LightGBM)</h3>
-              <div class="muted small">
-                key: <code>tabular</code>
-                
-              </div>
+              <div class="muted small">key: <code>tabular</code></div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
@@ -205,11 +239,28 @@
             
 
             <div class="card">
-              <h3>GNN (internal split inside train graph)</h3>
-              <div class="muted small">
-                key: <code>gnn_internal</code>
-                &nbsp;|&nbsp;pos_weight=33.578
+              <h3>Graph-metrics baseline (контрольная модель без GNN)</h3>
+              <div class="muted small">key: <code>graph_metrics</code></div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.160862</code><br/>
+                  PR-AUC: <code>0.133289</code><br/>
+                  ROC-AUC: <code>0.730922</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.142755</code><br/>
+                  PR-AUC: <code>0.109965</code><br/>
+                  ROC-AUC: <code>0.705191</code>
+                </div>
               </div>
+            </div>
+            
+
+            <div class="card">
+              <h3>GNN (internal split внутри train-графа, только для абляции)</h3>
+              <div class="muted small">key: <code>gnn_internal</code> | pos_weight=33.578</div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
@@ -228,11 +279,8 @@
             
 
             <div class="card">
-              <h3>Fusion (internal, for ablation only)</h3>
-              <div class="muted small">
-                key: <code>fusion_internal</code>
-                
-              </div>
+              <h3>Fusion (internal, только для абляции)</h3>
+              <div class="muted small">key: <code>fusion_internal</code></div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
@@ -251,38 +299,32 @@
             
 
             <div class="card">
-              <h3>GNN (external inductive, future split)</h3>
-              <div class="muted small">
-                key: <code>gnn_external</code>
-                
-              </div>
+              <h3>GNN (индуктивно, future split)</h3>
+              <div class="muted small">key: <code>gnn_external</code></div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.252821</code><br/>
-                  PR-AUC: <code>0.219409</code><br/>
-                  ROC-AUC: <code>0.751259</code>
+                  logloss: <code>0.252660</code><br/>
+                  PR-AUC: <code>0.220032</code><br/>
+                  ROC-AUC: <code>0.751364</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.248088</code><br/>
-                  PR-AUC: <code>0.190163</code><br/>
-                  ROC-AUC: <code>0.701042</code>
+                  logloss: <code>0.241534</code><br/>
+                  PR-AUC: <code>0.195484</code><br/>
+                  ROC-AUC: <code>0.712946</code>
                 </div>
               </div>
             </div>
             
 
-        <h2>PR curves</h2>
-        <div class="grid">
-          <div class='card'><h3>PR-кривая: Tabular (LightGBM)</h3><img src="assets/pr_curve_tabular.png" alt="pr_curve_tabular.png"/></div>
-<div class='card'><h3>PR-кривая: GNN (internal, ablation)</h3><img src="assets/pr_curve_gnn_internal.png" alt="pr_curve_gnn_internal.png"/></div>
-<div class='card'><h3>PR-кривая: Fusion (internal, ablation)</h3><img src="assets/pr_curve_fusion_internal.png" alt="pr_curve_fusion_internal.png"/></div>
-<div class='card'><h3>PR-кривая: GNN (external, inductive) — VAL</h3><img src="assets/pr_curve_gnn_external_val.png" alt="pr_curve_gnn_external_val.png"/></div>
-<div class='card'><h3>PR-кривая: Fusion (external, честный режим) — VAL</h3><img src="assets/pr_curve_fusion_external.png" alt="pr_curve_fusion_external.png"/></div>
-        </div>
+        <h2>PR-кривые</h2>
+        <div class="grid"><div class='card'><h3>PR-кривая: Гибрид (честный режим) — VAL</h3><img src="assets/pr_curve_fusion_external.png" alt="pr_curve_fusion_external.png"/></div>
+<div class='card'><h3>PR-кривая: Tabular (LightGBM) — VAL</h3><img src="assets/pr_curve_tabular.png" alt="pr_curve_tabular.png"/></div>
+<div class='card'><h3>PR-кривая: Graph-metrics baseline — VAL</h3><img src="assets/pr_curve_graph_metrics.png" alt="pr_curve_graph_metrics.png"/></div>
+<div class='card'><h3>PR-кривая: GNN (индуктивно) — VAL</h3><img src="assets/pr_curve_gnn_external_val.png" alt="pr_curve_gnn_external_val.png"/></div></div>
 
-        <h2>Thresholding policy</h2>
+        <h2>Политика порогов</h2>
         <div class='grid'>
         <div class='card'>
           <h3>TABULAR thresholds</h3>
@@ -294,8 +336,8 @@
         
         <div class='card'>
           <h3>FUSION_EXTERNAL thresholds</h3>
-          <div>t_review: <code>0.048066</code></div>
-          <div>t_deny: <code>0.275694</code></div>
+          <div>t_review: <code>0.048109</code></div>
+          <div>t_deny: <code>0.275901</code></div>
           <div class='muted small'>constraints: max_fpr_deny=0.01 | max_review_share=0.1</div>
           <div class='muted small'>source: <a href="../artifacts/thresholds/thresholds_fusion_external.json">thresholds_fusion_external.json</a></div>
         </div>
@@ -410,27 +452,27 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>90754</td>
-      <td>0.873887</td>
-      <td>0.010865</td>
-      <td>0.000190</td>
-      <td>0.048066</td>
+      <td>90756</td>
+      <td>0.873906</td>
+      <td>0.010897</td>
+      <td>0.000189</td>
+      <td>0.048109</td>
     </tr>
     <tr>
       <td>review</td>
       <td>10084</td>
       <td>0.097101</td>
-      <td>0.110869</td>
-      <td>0.048066</td>
-      <td>0.275506</td>
+      <td>0.110770</td>
+      <td>0.048110</td>
+      <td>0.275851</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>3013</td>
-      <td>0.029013</td>
-      <td>0.669101</td>
-      <td>0.275694</td>
-      <td>0.999505</td>
+      <td>3011</td>
+      <td>0.028993</td>
+      <td>0.668881</td>
+      <td>0.275901</td>
+      <td>0.999506</td>
     </tr>
   </tbody>
 </table>
@@ -454,27 +496,27 @@
   <tbody>
     <tr>
       <td>allow</td>
-      <td>92755</td>
-      <td>0.893146</td>
-      <td>0.010619</td>
-      <td>0.000164</td>
-      <td>0.048053</td>
+      <td>92671</td>
+      <td>0.892337</td>
+      <td>0.010510</td>
+      <td>0.000163</td>
+      <td>0.048098</td>
     </tr>
     <tr>
       <td>review</td>
-      <td>8712</td>
-      <td>0.083889</td>
-      <td>0.116621</td>
-      <td>0.048071</td>
-      <td>0.275167</td>
+      <td>8780</td>
+      <td>0.084543</td>
+      <td>0.117198</td>
+      <td>0.048110</td>
+      <td>0.275594</td>
     </tr>
     <tr>
       <td>deny</td>
-      <td>2385</td>
-      <td>0.022965</td>
-      <td>0.606289</td>
-      <td>0.275830</td>
-      <td>0.999035</td>
+      <td>2401</td>
+      <td>0.023119</td>
+      <td>0.601416</td>
+      <td>0.276024</td>
+      <td>0.999037</td>
     </tr>
   </tbody>
 </table>
@@ -483,15 +525,13 @@
     </div>
     
 
-        <h2>Zone share plots</h2>
-        <div class="grid">
-          <div class='card'><h3>Доли зон: Tabular — VAL</h3><img src="assets/zone_share_tabular_val.png" alt="zone_share_tabular_val.png"/></div>
+        <h2>Доли зон</h2>
+        <div class="grid"><div class='card'><h3>Доли зон: Tabular — VAL</h3><img src="assets/zone_share_tabular_val.png" alt="zone_share_tabular_val.png"/></div>
 <div class='card'><h3>Доли зон: Tabular — TEST</h3><img src="assets/zone_share_tabular_test.png" alt="zone_share_tabular_test.png"/></div>
-<div class='card'><h3>Доли зон: Fusion external — VAL</h3><img src="assets/zone_share_fusion_external_val.png" alt="zone_share_fusion_external_val.png"/></div>
-<div class='card'><h3>Доли зон: Fusion external — TEST</h3><img src="assets/zone_share_fusion_external_test.png" alt="zone_share_fusion_external_test.png"/></div>
-        </div>
+<div class='card'><h3>Доли зон: Hybrid — VAL</h3><img src="assets/zone_share_fusion_external_val.png" alt="zone_share_fusion_external_val.png"/></div>
+<div class='card'><h3>Доли зон: Hybrid — TEST</h3><img src="assets/zone_share_fusion_external_test.png" alt="zone_share_fusion_external_test.png"/></div></div>
 
-        <h2>Economics / cost (TEST)</h2>
+        <h2>Экономика (TEST)</h2>
         <div class='grid'>
         <div class='card'>
           <h3>TABULAR cost (TEST)</h3>
@@ -503,247 +543,33 @@
         <div class='card'>
           <h3>FUSION_EXTERNAL cost (TEST)</h3>
           <div class='muted small'>source: <a href="../artifacts/evaluation/cost_fusion_external_test.json">cost_fusion_external_test.json</a></div>
-          <div>avg_cost_per_tx: <code>2.516793</code></div>
-          <div>total_cost: <code>261374.000</code></div>
+          <div>avg_cost_per_tx: <code>2.505585</code></div>
+          <div>total_cost: <code>260210.000</code></div>
         </div>
         </div>
-
-        <h2 id='shap'>Интерпретация (SHAP, табличная модель)</h2>
-<div class='muted'>Глобальная важность признаков и их вклад в решение модели LightGBM. Для batch-predict доступна опция <code>--with-reasons</code>, которая добавляет <code>top_reasons</code> (top-k вкладов SHAP на транзакцию).</div>
-<div class='grid'>
-<div class='card'><h3>SHAP summary (bar)</h3><img src='assets/shap_summary_bar.png' /></div>
-<div class='card'><h3>SHAP summary (beeswarm)</h3><img src='assets/shap_summary_beeswarm.png' /></div>
-</div>
-<div class='card'>
-<h3>Top features (mean |SHAP|)</h3>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>feature</th>
-      <th>mean_abs_shap</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>TransactionAmt</td>
-      <td>0.237452</td>
-    </tr>
-    <tr>
-      <td>C13</td>
-      <td>0.170128</td>
-    </tr>
-    <tr>
-      <td>V70</td>
-      <td>0.167206</td>
-    </tr>
-    <tr>
-      <td>ProductCD_R</td>
-      <td>0.109534</td>
-    </tr>
-    <tr>
-      <td>card6_debit</td>
-      <td>0.109345</td>
-    </tr>
-    <tr>
-      <td>M4___MISSING__</td>
-      <td>0.105844</td>
-    </tr>
-    <tr>
-      <td>C11</td>
-      <td>0.105074</td>
-    </tr>
-    <tr>
-      <td>C1</td>
-      <td>0.102234</td>
-    </tr>
-    <tr>
-      <td>C14</td>
-      <td>0.086155</td>
-    </tr>
-    <tr>
-      <td>D4</td>
-      <td>0.082131</td>
-    </tr>
-    <tr>
-      <td>card1</td>
-      <td>0.079400</td>
-    </tr>
-    <tr>
-      <td>card2</td>
-      <td>0.073967</td>
-    </tr>
-    <tr>
-      <td>D2</td>
-      <td>0.064663</td>
-    </tr>
-    <tr>
-      <td>addr1</td>
-      <td>0.064528</td>
-    </tr>
-    <tr>
-      <td>M3_T</td>
-      <td>0.062805</td>
-    </tr>
-    <tr>
-      <td>D1</td>
-      <td>0.059985</td>
-    </tr>
-    <tr>
-      <td>card5</td>
-      <td>0.058596</td>
-    </tr>
-    <tr>
-      <td>V294</td>
-      <td>0.054955</td>
-    </tr>
-    <tr>
-      <td>V91</td>
-      <td>0.054273</td>
-    </tr>
-    <tr>
-      <td>M5_T</td>
-      <td>0.053886</td>
-    </tr>
-    <tr>
-      <td>V258</td>
-      <td>0.052766</td>
-    </tr>
-    <tr>
-      <td>P_emaildomain_gmail.com</td>
-      <td>0.051580</td>
-    </tr>
-    <tr>
-      <td>V49</td>
-      <td>0.050745</td>
-    </tr>
-    <tr>
-      <td>V165</td>
-      <td>0.049315</td>
-    </tr>
-    <tr>
-      <td>D3</td>
-      <td>0.046358</td>
-    </tr>
-    <tr>
-      <td>C6</td>
-      <td>0.045336</td>
-    </tr>
-    <tr>
-      <td>D15</td>
-      <td>0.043639</td>
-    </tr>
-    <tr>
-      <td>card6_credit</td>
-      <td>0.042039</td>
-    </tr>
-    <tr>
-      <td>V317</td>
-      <td>0.041332</td>
-    </tr>
-    <tr>
-      <td>D8</td>
-      <td>0.040855</td>
-    </tr>
-  </tbody>
-</table>
-<div class='muted small'>source: <a href="tables/shap_top_features.csv">shap_top_features.csv</a></div>
-<div class='muted small'>meta: <a href="tables/shap_meta.json">shap_meta.json</a></div>
-</div>
-<div class='card'>
-<h3>Пример output с причинами</h3>
-<div class='muted'>Файл содержит колонку <code>top_reasons</code> — JSON-массив из top-k признаков с их значениями и вкладом SHAP (положительный → повышает риск, отрицательный → снижает).</div>
-<div class='muted small'>example: <a href="../artifacts/predict/test_tabular_with_reasons.parquet">test_tabular_with_reasons.parquet</a></div>
-</div>
-
-        
-    <div class="card" id="graph_stats">
-      <h2>Graph statistics (A4.3)</h2>
-      <div class="muted small">
-        source: <a href="../artifacts/graph/graph_stats.json">artifacts/graph/graph_stats.json</a>
-      </div>
-
-      <div class="grid">
-        
-        <div class="card">
-          <h3>Nodes: |V| by type</h3>
-          <table>
-            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-            <tbody><tr><td><code>transaction</code></td><td><code>311553</code></td></tr><tr><td><code>card</code></td><td><code>2900</code></td></tr><tr><td><code>device</code></td><td><code>335</code></td></tr><tr><td><code>email</code></td><td><code>118</code></td></tr><tr><td><code>addr</code></td><td><code>106</code></td></tr></tbody>
-          </table>
-        </div>
-        
-        
-        <div class="card">
-          <h3>Edges: |E| by dst_type</h3>
-          <table>
-            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-            <tbody><tr><td><code>email</code></td><td><code>623083</code></td></tr><tr><td><code>addr</code></td><td><code>622477</code></td></tr><tr><td><code>device</code></td><td><code>619903</code></td></tr><tr><td><code>card</code></td><td><code>287084</code></td></tr></tbody>
-          </table>
-        </div>
-        
-        
-        <div class="card">
-          <h3>Edges: |E| by column</h3>
-          <table>
-            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-            <tbody><tr><td><code>P_emaildomain</code></td><td><code>311553</code></td></tr><tr><td><code>DeviceType</code></td><td><code>311553</code></td></tr><tr><td><code>R_emaildomain</code></td><td><code>311530</code></td></tr><tr><td><code>addr2</code></td><td><code>311394</code></td></tr><tr><td><code>addr1</code></td><td><code>311083</code></td></tr><tr><td><code>DeviceInfo</code></td><td><code>308350</code></td></tr><tr><td><code>card1</code></td><td><code>287084</code></td></tr></tbody>
-          </table>
-        </div>
-        
-        
-        <div class="card">
-          <h3>TX degree summary</h3>
-          <table>
-            <thead><tr><th>Key</th><th>Value</th></tr></thead>
-            <tbody><tr><td><code>count</code></td><td><code>311553.0</code></td></tr><tr><td><code>mean</code></td><td><code>6.909087699364153</code></td></tr><tr><td><code>median</code></td><td><code>7.0</code></td></tr><tr><td><code>p95</code></td><td><code>7.0</code></td></tr><tr><td><code>max</code></td><td><code>7.0</code></td></tr></tbody>
-          </table>
-        </div>
-        
-      </div>
-
-      <div class="grid">
-        <div class="card">
-          <h3>Connected components (TX)</h3>
-          <div>isolated_tx_share: <code>0.000000</code></div>
-          <div>components_count_tx: <code>1.000000</code></div>
-          <div>largest_component_share_tx: <code>1.000000</code></div>
-        </div>
-      </div>
-
-      <h3>Figures</h3>
-      <div class="grid">
-        <div class='card'><h3>Edges by destination node type</h3><img src="assets/graph_edges_by_dst_type.png" alt="graph_edges_by_dst_type.png"/></div>
-<div class='card'><h3>Graph degree distribution (transactions)</h3><img src="assets/graph_degree_tx_hist.png" alt="graph_degree_tx_hist.png"/></div>
-<div class='card'><h3>Top-20 entity nodes by degree</h3><img src="assets/graph_top_entities_degree.png" alt="graph_top_entities_degree.png"/></div>
-<div class='card'><h3>Connected component sizes (TX nodes)</h3><img src="assets/graph_components_hist.png" alt="graph_components_hist.png"/></div>
-      </div>
-    </div>
-    
 
         
         <div class="card" id="graph">
-          <h2>Graph visualization</h2>
+          <h2>Визуализация графа (pyvis)</h2>
           <div class="muted small">file: <a href="assets/graph.html">assets/graph.html</a></div>
-          <p>
-            <a href="assets/graph.html" target="_blank">Open interactive graph (pyvis) in new tab</a>
-          </p>
+          <p><a href="assets/graph.html" target="_blank">Открыть интерактивный граф в новой вкладке</a></p>
           <details>
-            <summary>Embed preview (iframe)</summary>
+            <summary>Встроенный просмотр (iframe)</summary>
             <iframe src="assets/graph.html" style="width:100%; height:850px; border:1px solid #eee; border-radius:10px;"></iframe>
           </details>
         </div>
         
 
         
-    <div class="card">
-      <h2 id="meta">Reproducibility / Metadata</h2>
+    <div class="card" id="meta">
+      <h2>Воспроизводимость</h2>
       <div class="small muted">
-        generated_at: <span class="mono">2026-03-03 21:26:49</span><br/>
-        git_commit: <span class="mono">ee513b3</span><br/>
+        generated_at: <span class="mono">2026-03-03 23:47:34</span><br/>
+        git_commit: <span class="mono">44ea571</span><br/>
         python: <span class="mono">3.11.9</span><br/>
       </div>
       <details>
-        <summary>pip freeze (first lines)</summary>
+        <summary>pip freeze (первые строки)</summary>
         <pre class="mono small">aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
@@ -784,22 +610,32 @@ matplotlib-inline==0.2.1
 mpmath==1.3.0
 multidict==6.7.1
 networkx==3.6.1
-... (49 more)</pre>
+numba==0.64.0
+numpy==2.4.2
+packaging==26.0
+pandas==3.0.1
+parso==0.8.6
+pillow==12.1.1
+prometheus_client==0.24.1
+prompt_toolkit==3.0.52
+propcache==0.4.1
+psutil==7.2.2
+... (39 more)</pre>
       </details>
     </div>
     
 
-        <h2>Notes for РПЗ</h2>
         <div class="card">
+          <h2>Примечания для ВКР</h2>
           <ul>
-            <li><b>fusion_external</b> is the main system mode (honest evaluation on future split).</li>
-            <li>Internal GNN/Fusion metrics are shown for ablation and debugging only.</li>
-            <li>Thresholds are fitted on VAL (constraints: max FPR for deny + max share for review).</li>
+            <li><b>fusion_external</b> — основной режим (честная оценка на future split).</li>
+            <li><b>internal</b>-метрики используются как абляция/отладка и не выдаются за «честный прод».</li>
+            <li>Graph-metrics baseline — контрольная модель: показывает вклад одной только топологии без нейросетей.</li>
           </ul>
         </div>
 
         <div class="muted small">
-          Generated files: <code>reports/report.html</code>, <code>reports/assets/</code>, <code>reports/tables/</code>.
+          Generated: <code>reports/report.html</code>, <code>reports/assets/</code>, <code>reports/tables/</code>.
         </div>
       </body>
     </html>
