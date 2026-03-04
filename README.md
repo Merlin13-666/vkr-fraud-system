@@ -1,231 +1,74 @@
-# VKR Fraud System
+# VKR Fraud System — гибридная таблично-графовая система антифрода
 
-### Hybrid Tabular–Graph System for Fraudulent Transaction Detection
-
-**Bachelor Thesis (ВКР)**
-*Bauman Moscow State Technical University — IU8 (Information Security)*
-
-This repository contains a **reproducible machine learning system** for detecting fraudulent banking transactions using a **hybrid tabular–graph approach** combining gradient boosting and graph neural networks.
-
-The project implements a **full ML pipeline** including:
-
-* data preparation
-* feature engineering
-* tabular modeling
-* graph construction
-* graph neural networks
-* model fusion
-* decision policy
-* evaluation
-* automated report generation
-* interactive graph visualization
-
-The system is designed to resemble a **real anti-fraud scoring pipeline** used in financial institutions.
+**Тема ВКР:** *Система обнаружения мошеннических банковских транзакций*  
+**Цель проекта:** воспроизводимая “система” (pipeline → артефакты → отчёт → policy), которая объединяет
+табличную модель и GNN на гетерографе, и выдаёт финальное решение **ALLOW / REVIEW / DENY**.
 
 ---
 
-# Table of Contents
+## Что внутри (коротко)
 
-* Overview
-* Research Contribution
-* System Architecture
-* Dataset
-* Experimental Setup
-* Installation
-* Quick Start
-* Pipeline Overview
-* Project Structure
-* Training Pipeline
-* Evaluation & Decision Policy
-* Additional Experiments
-* Graph Visualization
-* Outputs
-* Reproducibility
-* VKR Defense Demonstration
+- **Tabular scorer:** LightGBM по табличным признакам.
+- **Graph scorer:** GNN на гетерографе (Hetero GraphSAGE / PyTorch Geometric).
+- **Fusion (main):** логистическая регрессия поверх скореров.
+  - **честный режим:** обучение мета-модели на `external VAL`, тест на `external TEST` (future split).
+- **Policy:** подбор порогов `t_review / t_deny` + таблицы decision zones + доли зон + простая экономика (cost).
+- **Graph Viz:** интерактивная визуализация ego-графа для расследования кейса (PyVis HTML). :contentReference[oaicite:3]{index=3}
+- **Auto-report:** HTML-отчёт “под РПЗ/защиту” (таблицы + графики + ссылки на артефакты).
+- **One-click (A12):** полный прогон одной командой (`python -m scripts.run_all`). :contentReference[oaicite:4]{index=4}
 
 ---
 
-# Overview
+## Содержание
 
-Fraud detection in financial transactions is a challenging problem due to:
-
-* **extreme class imbalance**
-* **complex relational structures between entities**
-* **evolving fraud patterns**
-
-Traditional approaches rely only on **tabular features** extracted from transactions.
-However, many fraud schemes involve **relational behavior** between accounts, devices, and identities.
-
-This project implements a **hybrid system combining:**
-
-| Component      | Model                                          |
-| -------------- | ---------------------------------------------- |
-| Tabular scorer | LightGBM                                       |
-| Graph scorer   | Heterogeneous Graph Neural Network (GraphSAGE) |
-| Fusion         | Logistic regression                            |
-
-The system produces a **risk score for each transaction**, which is converted into decisions:
-
-```
-ALLOW / REVIEW / DENY
-```
-
-This mimics decision policies used in production anti-fraud systems.
+- [1. Быстрый старт](#1-быстрый-старт)
+- [2. Установка](#2-установка)
+- [3. Данные](#3-данные)
+- [4. Структура проекта](#4-структура-проекта)
+- [5. Пайплайн (A2…A11)](#5-пайплайн-a2a11)
+- [6. One-click runner (A12)](#6-one-click-runner-a12)
+- [7. Артефакты и результаты](#7-артефакты-и-результаты)
+- [8. Запуск каждого шага вручную](#8-запуск-каждого-шага-вручную)
+- [9. Troubleshooting](#9-troubleshooting)
+- [10. Что показывать на защите](#10-что-показывать-на-защите)
 
 ---
 
-# Research Contribution
+## 1. Быстрый старт
 
-The main contributions of this work are:
+### 1.1 Полный прогон пайплайна (A12)
+```bash
+python -m scripts.run_all
+````
 
-### Hybrid fraud detection architecture
+**Результат:** `reports/report.html` + `reports/assets/*` + `reports/tables/*`
 
-A system combining:
+### 1.2 Пересчитать всё заново
 
-* **tabular ML models**
-* **graph neural networks**
-* **meta-model fusion**
-
-### Inductive graph inference
-
-The graph model supports **inductive prediction** for new transactions not present in the training graph.
-
-### Honest evaluation protocol
-
-Evaluation uses **time-based splits** to avoid temporal leakage:
-
-```
-train → val → test
+```bash
+python -m scripts.run_all --force
 ```
 
-### Fusion strategy
-
-A meta-model learns to combine tabular and graph predictions using **external validation data**.
-
-### Additional experiments
-
-The study includes:
-
-* **GNN architecture ablation**
-* **graph robustness experiments**
-* **decision policy optimization**
-
-### Practical anti-fraud system components
-
-The project implements features typical for real fraud systems:
-
-* decision thresholds
-* investigation zones
-* cost estimation
-* case investigation tools
+> Логика run_all: шаг запускается, если `--force` или если не существуют ожидаемые outputs. 
 
 ---
 
-# System Architecture
+## 2. Установка
 
-```
-Raw Transactions
-       │
-       ▼
-Feature Extraction
-       │
-       ▼
-Tabular Model (LightGBM)
-       │
-       ▼
-Graph Construction
-       │
-       ▼
-Graph Neural Network (GraphSAGE)
-       │
-       ▼
-Fusion Model
-       │
-       ▼
-Risk Score
-       │
-       ▼
-Decision Policy
-ALLOW / REVIEW / DENY
-       │
-       ▼
-Investigation Tools
-(Graph Visualization)
-```
+### 2.1 Python / окружение
 
----
-
-# Dataset
-
-The system uses the public dataset:
-
-**IEEE-CIS Fraud Detection (Kaggle)**
-
-Dataset characteristics:
-
-| Property     | Value             |
-| ------------ | ----------------- |
-| Transactions | ~590k             |
-| Features     | ~430              |
-| Fraud rate   | highly imbalanced |
-
-Data sources include:
-
-* transaction features
-* card information
-* device metadata
-* email domains
-
-Expected dataset location:
-
-```
-data/raw/ieee-cis/
-  train_transaction.csv
-  train_identity.csv
-```
-
----
-
-# Experimental Setup
-
-### Time-based split
-
-To simulate real deployment conditions:
-
-| Split | Purpose               |
-| ----- | --------------------- |
-| train | model training        |
-| val   | hyperparameter tuning |
-| test  | final evaluation      |
-
-### Metrics
-
-Primary metric:
-
-```
-PR-AUC
-```
-
-Secondary metrics:
-
-* ROC-AUC
-* log-loss
-
-PR-AUC is preferred due to **extreme class imbalance**.
-
----
-
-# Installation
-
-### Create environment
+* Python **3.10+**
+* Windows PowerShell примеры ниже
 
 ```bash
 python -m venv .venv
-.\.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 ```
 
-### Install dependencies
+### 2.2 Зависимости
+
+> Важно: torch/pyg ставятся в зависимости от платформы. Если PyG падает при установке — см. Troubleshooting.
 
 ```bash
 pip install -r requirements_torch_cpu.txt
@@ -235,348 +78,389 @@ pip install -r requirements.txt
 
 ---
 
-# Quick Start
+## 3. Данные
 
-Run the entire pipeline with one command:
+Используется датасет **IEEE-CIS Fraud Detection**.
+
+Минимально нужны:
+
+* `train_transaction.csv`
+* `train_identity.csv`
+
+Ожидаемое расположение:
+
+```text
+data/raw/ieee-cis/
+  train_transaction.csv
+  train_identity.csv
+```
+
+---
+
+## 4. Структура проекта
+
+```text
+vkr_fraud_system/
+  configs/
+  data/
+    raw/ieee-cis/
+    processed/
+    splits/
+  artifacts/
+    tabular/
+    graph/
+    fusion/
+    thresholds/
+    evaluation/
+  reports/
+    report.html
+    assets/
+    tables/
+  src/fraud_system/
+  scripts/
+    00_prepare_data.py
+    01_train_tabular.py
+    02_build_graph.py
+    03_make_graph_data.py
+    04_train_gnn.py
+    05_train_fusion.py
+    06_evaluate.py
+    07_predict_tabular.py
+    08_predict_gnn_external.py
+    09_calibrate_gnn.py
+    10_train_fusion_external.py
+    11_auto_report.py
+    12_shap_tabular.py
+    13_serve_api.py
+    16_build_graph_viz.py
+    17_graph_stats.py
+    18_train_graph_metrics_baseline.py
+    19_ablation_gnn.py
+    20_graph_robustness.py
+    run_all.py
+```
+
+---
+
+## 5. Пайплайн (A2…A11)
+
+Ниже — “идеальная цепочка” для полного эксперимента и отчёта:
+
+1. **A2** Prepare data → `data/processed/*.parquet`, `data/splits/split_info.json`
+2. **A3** Train tabular → `artifacts/tabular/*`, PR-кривая, предикты
+3. **A4.1** Build graph → `artifacts/graph/node_map.parquet`, `edges.parquet`
+4. **A4.2** Make PyG data → `graph_data.pt`, `tx_index.parquet`
+5. **A4.3** Graph stats → графики топологии
+6. **A6.1** Graph-metrics baseline → контрольная модель “только топология”
+7. **A5** Train GNN (internal) → отладка/абляция
+8. **A6** Fusion internal → отладка/абляция
+9. **A9** Predict GNN external (val/test) → inductive предикты (честный режим для графа) 
+10. **A9.3** Calibrate GNN → calibrated предикты
+11. **A10** Fusion external (MAIN) → честные метрики/предикты
+12. **A7** Evaluate → thresholds/zones/cost
+13. **A11** Graph viz (PyVis) → `reports/assets/graph.html` 
+14. **A11** Auto-report → `reports/report.html`
+
+---
+
+## 6. One-click runner (A12)
+
+### 6.1 Запуск
 
 ```bash
 python -m scripts.run_all
 ```
 
-Force recomputation:
+### 6.2 Пересчёт всего
 
 ```bash
 python -m scripts.run_all --force
 ```
 
-Run only evaluation and report:
+### 6.3 Запуск только отчёта (если артефакты уже есть)
+
+У run_all есть режим “only report” (граф-виз + авто-отчёт).
+(Если у тебя этот флаг включён в текущей версии run_all.)
+
+Пример:
+
+```bash
+python -m scripts.run_all --only-report
+```
+
+### 6.4 Запуск подграфа / от-до шагов
+
+Если у тебя включены флаги `--from-step` / `--to-step` — удобно пересчитывать кусок пайплайна, например:
 
 ```bash
 python -m scripts.run_all --from-step A7_evaluate --to-step A11_auto_report
 ```
 
-Final report:
-
-```
-reports/report.html
-```
+> Важно: run_all запускает шаги по факту наличия outputs (кэширование шагов). 
 
 ---
 
-# Pipeline Overview
+## 7. Артефакты и результаты
 
-The training pipeline consists of the following stages.
+### 7.1 Главный результат для ВКР
 
-```
-Raw Data
-   │
-   ▼
-Data Preparation
-   │
-   ▼
-Tabular Model Training
-   │
-   ▼
-Graph Construction
-   │
-   ▼
-GNN Training
-   │
-   ▼
-External Graph Prediction
-   │
-   ▼
-Fusion Model
-   │
-   ▼
-Evaluation
-   │
-   ▼
-Report Generation
-```
+**Основной режим:** `fusion_external` (future split, честная оценка)
+
+Смотри:
+
+* `artifacts/evaluation/fusion_metrics_external.json`
+* `reports/report.html`
+
+### 7.2 Где смотреть что именно
+
+* Метрики: `artifacts/evaluation/*metrics*.json`
+* Предикты: `artifacts/evaluation/*pred*.parquet`
+* Пороги: `artifacts/thresholds/*.json`
+* Decision zones: `artifacts/evaluation/decision_zones_*.csv`
+* Доли зон: `artifacts/evaluation/zone_share_*.png`
+* Экономика: `artifacts/evaluation/cost_*_test.json`
+* Итоговый отчёт: `reports/report.html`
+* Визуализация графа: `reports/assets/graph.html`
 
 ---
 
-# Project Structure
+## 8. Запуск каждого шага вручную
 
-```
-vkr_fraud_system/
+Ниже — команды (как в отчёте/презентации удобно показывать “по блокам”).
 
-configs/
-data/
-artifacts/
-reports/
-
-src/fraud_system/
-
-scripts/
-```
-
-Key components:
-
-| Directory | Purpose                       |
-| --------- | ----------------------------- |
-| configs   | schema and configuration      |
-| data      | raw and processed datasets    |
-| artifacts | models and evaluation outputs |
-| reports   | generated report              |
-| scripts   | pipeline scripts              |
-
----
-
-# Training Pipeline
-
-The system implements the following training stages.
-
-### A2 — Data preparation
-
-```
-scripts/00_prepare_data.py
-```
-
-* schema normalization
-* merging identity features
-* time split
-
-Outputs:
-
-```
-data/processed/
-data/splits/
-```
-
----
-
-### A3 — Tabular model
-
-```
-scripts/01_train_tabular.py
-```
-
-Model:
-
-```
-LightGBM
-```
-
-Outputs:
-
-```
-tabular model
-PR curve
-prediction files
-```
-
----
-
-### A4 — Graph construction
-
-```
-scripts/02_build_graph.py
-scripts/03_make_graph_data.py
-```
-
-Graph contains nodes such as:
-
-* transactions
-* cards
-* devices
-* emails
-
----
-
-### A5 — Graph neural network
-
-```
-scripts/04_train_gnn.py
-```
-
-Architecture:
-
-```
-Hetero GraphSAGE
-(PyTorch Geometric)
-```
-
----
-
-### A10 — Fusion model
-
-```
-scripts/10_train_fusion_external.py
-```
-
-Meta-model:
-
-```
-Logistic Regression
-```
-
-Inputs:
-
-```
-tabular score
-graph score
-```
-
----
-
-# Evaluation & Decision Policy
-
-After scoring, transactions are assigned to zones:
-
-| Score                     | Decision |
-| ------------------------- | -------- |
-| score < T_review          | ALLOW    |
-| T_review ≤ score < T_deny | REVIEW   |
-| score ≥ T_deny            | DENY     |
-
-Thresholds are optimized using validation data.
-
-Evaluation includes:
-
-* PR curves
-* zone distributions
-* cost estimation
-
----
-
-# Additional Experiments
-
-### GNN Ablation
-
-Architecture parameters tested:
-
-* number of layers
-* embedding size
-* neighbors
-
-Results stored in:
-
-```
-artifacts/evaluation/gnn_ablation.csv
-```
-
----
-
-### Graph Robustness
-
-Experiment:
-
-```
-edge dropout
-```
-
-Purpose:
-
-Evaluate model stability under graph perturbations.
-
-Outputs:
-
-```
-graph_robustness.csv
-graph_robustness_pr_auc_vs_drop.png
-```
-
----
-
-# Graph Visualization
-
-The system includes an **interactive investigation tool**.
-
-Generate ego-graph visualization:
+### A2) Prepare data
 
 ```bash
-python -m scripts.16_build_graph_viz
+python -m scripts.00_prepare_data
 ```
 
-Output:
-
-```
-reports/assets/graph.html
-```
-
-This allows exploration of relationships between entities connected to suspicious transactions.
+**Что делает:** загрузка CSV → merge → schema mapping → time split → parquet + split_info.json
 
 ---
 
-# Outputs
+### A3) Train Tabular (LightGBM)
 
-Main outputs:
-
-```
-artifacts/
-reports/
+```bash
+python -m scripts.01_train_tabular
 ```
 
-Important files:
-
-| File                            | Description             |
-| ------------------------------- | ----------------------- |
-| fusion_metrics_external.json    | final model metrics     |
-| thresholds_fusion_external.json | decision thresholds     |
-| report.html                     | final experiment report |
+**Выходы:** модель, PR-кривая, метрики, предикты `val/test`
 
 ---
 
-# Reproducibility
+### A4.1) Build graph artifacts
 
-Key reproducibility features:
-
-* deterministic pipeline
-* one-click runner
-* saved artifacts
-* configuration files
-
-Run the entire experiment:
-
+```bash
+python -m scripts.02_build_graph
 ```
-python -m scripts.run_all
+
+**Выходы:** `node_map.parquet`, `edges.parquet`, `graph_info.json`
+
+---
+
+### A4.2) Convert to PyG HeteroData
+
+```bash
+python -m scripts.03_make_graph_data
+```
+
+**Выходы:** `graph_data.pt`, `tx_index.parquet`
+
+---
+
+### A4.3) Graph topology stats
+
+```bash
+python -m scripts.17_graph_stats
+```
+
+**Выходы:** графики степени, компонент, распределения рёбер и т.д.
+
+---
+
+### A6.1) Graph-metrics baseline (без GNN)
+
+```bash
+python -m scripts.18_train_graph_metrics_baseline
+```
+
+**Смысл:** показать вклад “одной топологии” без нейросети (контрольная модель).
+
+---
+
+### A5) Train GNN (internal)
+
+```bash
+python -m scripts.04_train_gnn --device cpu
+```
+
+**Смысл:** отладка GNN в internal-режиме (внутри train-графа), не выдаётся за честный production.
+
+---
+
+### A6) Fusion internal
+
+```bash
+python -m scripts.05_train_fusion
+```
+
+**Смысл:** абляция/отладка fusion на internal предиктах.
+
+---
+
+### A9) Inductive GNN predict (external val/test)
+
+```bash
+python -m scripts.08_predict_gnn_external --split val
+python -m scripts.08_predict_gnn_external --split test
+```
+
+Параметр:
+
+* `--split {val|test}` 
+
+---
+
+### A9.3) Calibration (temperature scaling)
+
+```bash
+python -m scripts.09_calibrate_gnn
+```
+
+**Смысл:** калибровать вероятности external GNN (чтобы fusion/thresholds работали стабильнее).
+
+---
+
+### A10) Fusion external (MAIN)
+
+```bash
+python -m scripts.10_train_fusion_external
+```
+
+**Смысл:** честная мета-модель: обучается на external VAL, тестируется на external TEST.
+
+---
+
+### A7) Evaluate (thresholds / zones / cost)
+
+```bash
+python -m scripts.06_evaluate
+```
+
+**Выходы:** thresholds + decision zones + доли зон + cost.
+
+---
+
+### A11) Graph visualization (PyVis)
+
+```bash
+# Автовыбор “самой рискованной” транзакции из pred parquet:
+python -m scripts.16_build_graph_viz --auto-pick --pred-path artifacts/evaluation/val_pred_fusion_external.parquet
+
+# Или явно по transaction_id:
+python -m scripts.16_build_graph_viz --mode ego_tx --tx-id 123456789
+
+# Или ego-граф вокруг сущности:
+python -m scripts.16_build_graph_viz --mode ego_entity --entity-type card --entity-value 1234
+```
+
+Параметры (основные): 
+
+* `--mode {ego_tx|ego_entity}`
+* `--tx-id <int>` (для ego_tx)
+* `--auto-pick` + `--pred-path <parquet>` (для ego_tx без ручного id)
+* `--entity-type <str>` + `--entity-value <str>` (для ego_entity)
+* `--hops <int>` — радиус обхода
+* `--max-nodes <int>`, `--max-edges <int>` — ограничения на размер
+* `--show-physics` — включить “физику” в визуализации
+
+Выход: `reports/assets/graph.html`
+
+---
+
+### A11) Auto-report
+
+```bash
+python -m scripts.11_auto_report
+```
+
+Выход: `reports/report.html`
+
+---
+
+## 9. Troubleshooting
+
+### 9.1 “Данные и разбиение” пустые / train/val/test = None
+
+Это почти всегда значит одно из двух:
+
+1. **Файл `data/splits/split_info.json` не создан** → не запускался A2, или упал.
+2. **В split_info.json другие ключи**, чем ожидает отчёт (например, `train_rows` вместо `train_size`).
+
+**Что сделать:**
+
+* Перезапусти A2:
+
+  ```bash
+  python -m scripts.00_prepare_data
+  ```
+* Открой `data/splits/split_info.json` и проверь поля:
+
+  * ожидаются `train_size`, `val_size`, `test_size` и `*_fraud_rate`.
+
+---
+
+### 9.2 “PR-AUC vs layers” и “PR-AUC vs edge drop%” не видно в отчёте
+
+Самая частая причина — **картинки не копируются в `reports/assets/`**, или в HTML вставлен путь не из `reports/assets`, а напрямую из `artifacts/evaluation/...`.
+
+**Правильно:** отчёт должен ссылаться на файлы, которые реально лежат в `reports/assets/`.
+Проверь наличие:
+
+* `reports/assets/gnn_ablation_pr_auc_vs_layers.png`
+* `reports/assets/graph_robustness_pr_auc_vs_drop.png`
+
+Если их нет — запусти соответствующие шаги:
+
+```bash
+python -m scripts.19_ablation_gnn
+python -m scripts.20_graph_robustness
+python -m scripts.11_auto_report
 ```
 
 ---
 
-# VKR Defense Demonstration
+### 9.3 GraphViz ругается “tx not found in tx_index”
 
-For thesis defense it is recommended to show:
+Это значит: транзакция из pred-файла отсутствует в текущем граф-индексе.
 
-1️⃣ Final model results
+Решение:
 
-```
-fusion_external metrics
-```
+* пересобрать граф:
 
-2️⃣ Decision zones
-
-```
-ALLOW / REVIEW / DENY
-```
-
-3️⃣ Automated report
-
-```
-reports/report.html
-```
-
-4️⃣ Graph investigation tool
-
-```
-reports/assets/graph.html
-```
-
-5️⃣ One-click pipeline
-
-```
-python -m scripts.run_all
-```
+  ```bash
+  python -m scripts.02_build_graph
+  python -m scripts.03_make_graph_data
+  ```
+* или указывать `--tx-id` вручную (из `artifacts/graph/tx_index.parquet`).
 
 ---
 
-# License
+## 10. Что показывать на защите
 
-This repository was developed as part of a **Bachelor Thesis** at
-**Bauman Moscow State Technical University**.
+Минимальный “комиссионный пакет”:
 
-The code is provided for **research and educational purposes**.
+1. **Главный режим (A10)**: `fusion_external` метрики + PR-кривая
+2. **Policy (A7)**: thresholds + зоны + доли зон + cost
+3. **Auto-report (A11)**: `reports/report.html`
+4. **One-click (A12)**: `python -m scripts.run_all`
+5. (опционально) **GraphViz (A11)**: `reports/assets/graph.html`
 
+---
 
+## Лицензия / дисклеймер
+
+Проект учебно-исследовательский. Не является банковской production-системой.
+Датасет IEEE-CIS используется в рамках условий Kaggle/источника.
+
+```
