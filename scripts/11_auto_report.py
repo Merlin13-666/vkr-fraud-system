@@ -263,6 +263,8 @@ def main() -> None:
         ("graph_metrics_feature_importance.png", "graph_metrics_feature_importance.png"),
         ("shap_summary_bar.png", "shap_summary_bar.png"),
         ("shap_summary_beeswarm.png", "shap_summary_beeswarm.png"),
+
+        ("gnn_ablation_pr_auc_vs_layers.png", "gnn_ablation_pr_auc_vs_layers.png"),
     ]
 
     copied_figs: List[str] = []
@@ -286,6 +288,12 @@ def main() -> None:
     dz_tab_test = _read_csv_if_exists(eval_dir / "decision_zones_tabular_test.csv")
     dz_fus_val = _read_csv_if_exists(eval_dir / "decision_zones_fusion_external_val.csv")
     dz_fus_test = _read_csv_if_exists(eval_dir / "decision_zones_fusion_external_test.csv")
+
+    # ---------
+    # GNN Ablation (A5.2)
+    # ---------
+    ablation_csv = eval_dir / "gnn_ablation.csv"
+    ablation_png = assets_dir / "gnn_ablation_pr_auc_vs_layers.png"
 
     # ---- Data/split block (VKR-friendly)
     split_info = _read_json(Path("data/splits/split_info.json")) or {}
@@ -347,6 +355,28 @@ def main() -> None:
     gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     git_hash = _git_commit_short() or "n/a"
     freeze = _pip_freeze_short()
+
+    ablation_html = ""
+    if ablation_csv.exists():
+        try:
+            df_ab = pd.read_csv(ablation_csv)
+            ablation_html = f"""
+                <div class='card' id='ablation'>
+                  <h2>GNN Ablation (A5.2)</h2>
+                  <div class='muted small'>
+                    source: {_link(ablation_csv, ablation_csv.name, report_dir=reports_dir)}
+                  </div>
+                  {_df_to_html(df_ab, max_rows=50)}
+                  {"<h3>PR-AUC vs num_layers</h3>" + _img("gnn_ablation_pr_auc_vs_layers.png") if ablation_png.exists() else ""}
+                </div>
+                """
+        except Exception:
+            ablation_html = f"""
+                <div class='card' id='ablation'>
+                  <h2>GNN Ablation (A5.2)</h2>
+                  <div class='muted'>Failed to read: {_norm_path(ablation_csv)}</div>
+                </div>
+                """
 
     meta_html = f"""
     <div class="card" id="meta">
@@ -542,6 +572,7 @@ def main() -> None:
         <li><a href="#comparison">Сравнение моделей</a></li>
         <li><a href="#graph">Визуализация графа</a></li>
         <li><a href="#meta">Воспроизводимость</a></li>
+        <li><a href="#ablation">Абляции GNN</a></li>
       </ul>
     </div>
     """
@@ -594,7 +625,9 @@ def main() -> None:
 
         <h2>PR-кривые</h2>
         <div class="grid">{pr_figs_html}</div>
-
+        
+        {ablation_html}
+        
         <h2>Политика порогов</h2>
         {thr_html}
 

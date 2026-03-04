@@ -73,6 +73,17 @@ def build_steps(
         module_args=[],
     )
 
+    s_gnn_ablation = Step(
+        key="A5_2_ablation_gnn",
+        title="GNN ablation grid (lite): layers/embed_dim/neighbors",
+        outputs=[
+            _p("artifacts", "evaluation", "gnn_ablation.csv"),
+            _p("artifacts", "evaluation", "gnn_ablation_pr_auc_vs_layers.png"),
+        ],
+        module="scripts.19_ablation_gnn",
+        module_args=["--device", "cpu"],  # или без args, если в 19 есть дефолты
+    )
+
     s_tabular = Step(
         key="A3_tabular",
         title="Train tabular (LightGBM) + preds",
@@ -273,6 +284,7 @@ def build_steps(
         s_evaluate,
         s_graph_viz,
         s_report,
+        s_gnn_ablation
     ]
 
 
@@ -295,6 +307,10 @@ def main() -> None:
     parser.add_argument("--graph-max-nodes", type=int, default=1500)
     parser.add_argument("--graph-max-edges", type=int, default=3000)
 
+    parser.add_argument("--skip-ablation", action="store_true")
+    parser.add_argument("--skip-ablation", action="store_true")
+    parser.add_argument("--only-report", action="store_true")
+
     args = parser.parse_args()
 
     steps = build_steps(
@@ -307,6 +323,9 @@ def main() -> None:
         graph_max_nodes=args.graph_max_nodes,
         graph_max_edges=args.graph_max_edges,
     )
+
+    if args.skip_ablation:
+        steps = [s for s in steps if s.key != "A5_2_ablation_gnn"]
 
     if args.only_graph_metrics:
         steps = [s for s in steps if s.key == "A6_1_graph_metrics_baseline"]
@@ -325,6 +344,16 @@ def main() -> None:
         if args.to_step not in keys:
             raise ValueError(f"--to-step unknown: {args.to_step}. Known: {keys}")
         steps = steps[: keys.index(args.to_step) + 1]
+
+    if not args.skip_gnn:
+        steps.append(args.s_train_gnn)
+
+        # >>> A5.2 ablation (iteration 3)
+        if not args.skip_ablation:
+            steps.append(args.s_gnn_ablation)
+
+        if not args.skip_internal_fusion:
+            steps.append(args.s_fusion_internal)
 
     print("VKR Fraud System: one-click runner (A12)")
     print(f"force={args.force}")

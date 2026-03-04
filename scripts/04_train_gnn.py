@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import json
 import random
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -29,23 +30,16 @@ def _set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def _select_tx_features(df: pd.DataFrame, max_features: int = 64) -> List[str]:
-    """
-    Select numeric transaction features (stable and CPU-friendly).
-    Excludes ids/labels/time and non-numeric.
-    """
     exclude = {"transaction_id", "time", "target"}
     num_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     return sorted(num_cols)[:max_features]
 
 
 def _impute_and_scale(X: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """
-    Median-impute NaNs and standardize features.
-    Returns transformed X and scaler stats (median/mean/std).
-    """
     X = X.astype(np.float32, copy=True)
 
     med = np.nanmedian(X, axis=0)
@@ -114,10 +108,6 @@ def _build_loaders(
 
 
 def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
-    """
-    Evaluate model on loader, return:
-      metrics, y_true, prob, logits
-    """
     model.eval()
     ys, ps, ls = [], [], []
     with torch.no_grad():
@@ -138,7 +128,6 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
     y_score = np.concatenate(ps)
     y_logit = np.concatenate(ls)
 
-    # stable clipping for logloss
     y_score = np.clip(y_score, 1e-6, 1 - 1e-6)
 
     metrics = {
@@ -149,55 +138,91 @@ def _eval(model: torch.nn.Module, loader: NeighborLoader, device: torch.device):
     return metrics, y_true, y_score, y_logit
 
 
+def _suffix(tag: Optional[str], out_suffix: Optional[str]) -> str:
+    # Единая логика имени прогона:
+    # 1) если out_suffix задан явно — используем его как “ключ”
+    # 2) иначе если tag задан — используем tag
+    # 3) иначе пусто (main run)
+    if out_suffix:
+        return out_suffix
+    if tag:
+        return tag
+    return ""
+
+
+def _name(base: str, suf: str, ext: str) -> str:
+    # base like "gnn_metrics", ext like ".json"
+    return f"{base}__{suf}{ext}" if suf else f"{base}{ext}"
+
+
 # =======================
 # Main
 # =======================
 
 def main() -> None:
-    seed = 42
-    device = torch.device("cpu")
+    parser = argparse.ArgumentParser(description="A5 Train GNN (HeteroSAGE) on train graph (internal split)")
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--seed", type=int, default=42)
 
-    max_num_features = 64
+    parser.add_argument("--num-layers", type=int, default=2)
+    parser.add_argument("--hidden-dim", type=int, default=64)
+    parser.add_argument("--embed-dim", type=int, default=64)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
-    cfg = GNNConfig(
-        hidden_dim=64,
-        num_layers=2,
-        dropout=0.2,
-        lr=1e-3,
-        weight_decay=1e-4,
-    )
-    embed_dim = 64
+    parser.add_argument("--neighbors", type=str, default="15,10", help="e.g. '15,10'")
+    parser.add_argument("--batch-size-train", type=int, default=2048)
+    parser.add_argument("--batch-size-eval", type=int, default=4096)
 
-    num_neighbors = None
-    batch_size_train = 2048
-    batch_size_eval = 4096
+    parser.add_argument("--max-epochs", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--early-stop-delta", type=float, default=1e-5)
 
-    max_epochs = 15
-    patience = 5
-    early_stop_delta = 1e-5
+    parser.add_argument("--max-num-features", type=int, default=64)
 
-    _set_seed(seed)
+    # Для абляций:
+    parser.add_argument("--tag", type=str, default=None, help="Optional tag, e.g. 'ablation'")
+    parser.add_argument("--out-suffix", type=str, default=None, help="Optional explicit suffix, e.g. 'L2_H64_E64_N15-10'")
+
+    # ВАЖНО: чтобы run_all не ломался — main run должен писать стандартные имена.
+    # Для абляций мы пишем только суффиксные артефакты. Флаг позволяет переопределить.
+    parser.add_argument("--write-default-artifacts", action="store_true", help="Also write default gnn_model.pt/gnn_metrics.json/...")
+
+    args = parser.parse_args()
+
+    # device
+    if args.device == "cuda" and not torch.cuda.is_available():
+        print("[A5] CUDA requested but not available -> fallback to CPU")
+        device = torch.device("cpu")
+    else:
+        device = torch.device(args.device)
+
+    _set_seed(args.seed)
 
     graph_dir = Path("artifacts/graph")
     eval_dir = Path("artifacts/evaluation")
+    data_dir = Path("data/processed")
+
+    _ensure_dir(graph_dir)
     _ensure_dir(eval_dir)
 
     graph_path = graph_dir / "graph_data.pt"
     tx_index_path = graph_dir / "tx_index.parquet"
-    train_path = Path("data/processed") / "train.parquet"
+    train_path = data_dir / "train.parquet"
 
     if not graph_path.exists():
-        raise FileNotFoundError(f"Missing graph_data.pt: {graph_path} (run: python -m scripts.03_make_graph_data)")
+        raise FileNotFoundError(f"Missing: {graph_path} (run scripts.03_make_graph_data)")
     if not tx_index_path.exists():
-        raise FileNotFoundError(f"Missing tx_index.parquet: {tx_index_path} (run: python -m scripts.03_make_graph_data)")
+        raise FileNotFoundError(f"Missing: {tx_index_path} (run scripts.03_make_graph_data)")
     if not train_path.exists():
-        raise FileNotFoundError(f"Missing train.parquet: {train_path} (run: python -m scripts.00_prepare_data)")
+        raise FileNotFoundError(f"Missing: {train_path} (run scripts.00_prepare_data)")
 
     data = torch.load(graph_path, weights_only=False)
     tx_index = pd.read_parquet(tx_index_path)
     df = pd.read_parquet(train_path)
 
-    feat_cols = _select_tx_features(df, max_features=max_num_features)
+    feat_cols = _select_tx_features(df, max_features=int(args.max_num_features))
 
     df = df[["transaction_id", "time", "target"] + feat_cols].copy()
     df["transaction_id"] = df["transaction_id"].astype("int64")
@@ -224,12 +249,13 @@ def main() -> None:
     data["transaction"].x = torch.tensor(X, dtype=torch.float32)
     data["transaction"].y = torch.tensor(y, dtype=torch.long)
 
+    # entity features as ids
     for ntype in data.node_types:
         if ntype == "transaction":
             continue
         data[ntype].x = torch.arange(int(data[ntype].num_nodes), dtype=torch.long)
 
-    # Save scaler for inductive inference
+    # scaler saved (needed for inductive external)
     tx_scaler = {
         "feat_cols": feat_cols,
         "median": scaler_stats["median"],
@@ -237,8 +263,8 @@ def main() -> None:
         "std": scaler_stats["std"],
         "median_nan_to_0": scaler_stats.get("median_nan_to_0", True),
         "eps": scaler_stats.get("eps", 1e-6),
-        "max_num_features": int(max_num_features),
-        "seed": int(seed),
+        "max_num_features": int(args.max_num_features),
+        "seed": int(args.seed),
         "source": "A5 train graph transaction features (median impute + standardize)",
     }
     tx_scaler_path = graph_dir / "tx_scaler.json"
@@ -246,7 +272,7 @@ def main() -> None:
         json.dump(tx_scaler, f, ensure_ascii=False, indent=2)
     print(f"[A5] Saved tx scaler: {tx_scaler_path}")
 
-    # time-based split inside train graph (60/20/20)
+    # internal time split (60/20/20)
     order = np.argsort(times)
     n = len(order)
     n_train = int(0.6 * n)
@@ -266,25 +292,52 @@ def main() -> None:
         "time_train_end": int(times[idx_train].max()),
         "time_val_end": int(times[idx_val].max()),
         "feat_cols": feat_cols,
-        "max_num_features": int(max_num_features),
-        "seed": int(seed),
+        "max_num_features": int(args.max_num_features),
+        "seed": int(args.seed),
     }
     with open(graph_dir / "gnn_split.json", "w", encoding="utf-8") as f:
         json.dump(split_info, f, ensure_ascii=False, indent=2)
 
-    # sampling params
-    num_neighbors = {etype: [15, 10] for etype in data.edge_types}
+    # neighbors parse
+    parts = [p.strip() for p in str(args.neighbors).split(",") if p.strip()]
+    if len(parts) == 0:
+        raise ValueError("--neighbors is empty")
+    neighbors_list = [int(x) for x in parts]
 
+    num_neighbors = {etype: neighbors_list for etype in data.edge_types}
+
+    # config
+    cfg = GNNConfig(
+        hidden_dim=int(args.hidden_dim),
+        num_layers=int(args.num_layers),
+        dropout=float(args.dropout),
+        lr=float(args.lr),
+        weight_decay=float(args.weight_decay),
+    )
+    embed_dim = int(args.embed_dim)
+
+    # run suffix
+    # если не задан out_suffix — делаем информативный автоматически (как у тебя в логах)
+    auto_suffix = f"L{cfg.num_layers}_H{cfg.hidden_dim}_E{embed_dim}_N{'-'.join(map(str, neighbors_list))}"
+    run_suffix = _suffix(args.tag, args.out_suffix) or auto_suffix
+
+    print(
+        f"[A5] run={run_suffix} device={device.type} "
+        f"layers={cfg.num_layers} hidden={cfg.hidden_dim} embed={embed_dim} neighbors={neighbors_list}"
+    )
+
+    # loaders
     train_loader, train_pred_loader, val_loader, test_loader = _build_loaders(
         data=data,
         idx_train=idx_train,
         idx_val=idx_val,
         idx_test=idx_test,
         num_neighbors=num_neighbors,
-        batch_size_train=batch_size_train,
-        batch_size_eval=batch_size_eval,
+        batch_size_train=int(args.batch_size_train),
+        batch_size_eval=int(args.batch_size_eval),
     )
 
+    # model
     num_nodes_by_type = {nt: int(data[nt].num_nodes) for nt in data.node_types}
     model = HeteroSAGE(
         metadata=data.metadata(),
@@ -296,7 +349,7 @@ def main() -> None:
 
     opt = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-    # ===== A5.1: pos_weight for imbalanced labels =====
+    # imbalance
     y_train = y[idx_train]
     pos = float(y_train.sum())
     neg = float(len(y_train) - y_train.sum())
@@ -312,7 +365,7 @@ def main() -> None:
     stopped_epoch = None
     bad_epochs = 0
 
-    for epoch in range(1, max_epochs + 1):
+    for epoch in range(1, int(args.max_epochs) + 1):
         model.train()
         losses: List[float] = []
 
@@ -335,20 +388,20 @@ def main() -> None:
         val_metrics, _, _, _ = _eval(model, val_loader, device=device)
 
         print(
-            f"[A5][{epoch}] train_loss={train_loss:.6f} "
+            f"[A5][{run_suffix}][{epoch}] train_loss={train_loss:.6f} "
             f"val_logloss={val_metrics['logloss']:.6f} val_pr_auc={val_metrics['pr_auc']:.6f}"
         )
 
-        if val_metrics["logloss"] < best_val - early_stop_delta:
+        if val_metrics["logloss"] < best_val - float(args.early_stop_delta):
             best_val = float(val_metrics["logloss"])
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             best_epoch = epoch
             bad_epochs = 0
         else:
             bad_epochs += 1
-            if bad_epochs >= patience:
+            if bad_epochs >= int(args.patience):
                 stopped_epoch = epoch
-                print(f"[A5] Early stopping at epoch {epoch}")
+                print(f"[A5][{run_suffix}] Early stopping at epoch {epoch}")
                 break
 
     if best_state is not None:
@@ -358,13 +411,14 @@ def main() -> None:
     val_metrics, y_val, p_val, l_val = _eval(model, val_loader, device=device)
     test_metrics, y_te, p_te, l_te = _eval(model, test_loader, device=device)
 
-    print(f"[A5] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}")
-    print(f"[A5] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}")
-    print(f"[A5] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}")
+    print(f"[A5][{run_suffix}] TRAIN: logloss={train_metrics['logloss']:.6f}, pr_auc={train_metrics['pr_auc']:.6f}, roc_auc={train_metrics['roc_auc']:.6f}")
+    print(f"[A5][{run_suffix}] VAL:   logloss={val_metrics['logloss']:.6f}, pr_auc={val_metrics['pr_auc']:.6f}, roc_auc={val_metrics['roc_auc']:.6f}")
+    print(f"[A5][{run_suffix}] TEST:  logloss={test_metrics['logloss']:.6f}, pr_auc={test_metrics['pr_auc']:.6f}, roc_auc={test_metrics['roc_auc']:.6f}")
 
-    out_model = graph_dir / "gnn_model.pt"
-    torch.save(model.state_dict(), out_model)
-    print(f"[A5] Saved model: {out_model}")
+    # --- outputs (suffix + optional default)
+    model_suffix_path = graph_dir / _name("gnn_model", run_suffix, ".pt")
+    torch.save(model.state_dict(), model_suffix_path)
+    print(f"[A5][{run_suffix}] Saved model: {model_suffix_path}")
 
     tx_local = tx_index.set_index("tx_node_id")["transaction_id"]
 
@@ -383,19 +437,18 @@ def main() -> None:
     val_pred = _pred_df(idx_val, y_val, p_val, l_val)
     test_pred = _pred_df(idx_test, y_te, p_te, l_te)
 
-    train_pred_path = eval_dir / "train_pred_gnn.parquet"
-    val_pred_path = eval_dir / "val_pred_gnn.parquet"
-    test_pred_path = eval_dir / "test_pred_gnn.parquet"
+    train_pred_path = eval_dir / _name("train_pred_gnn", run_suffix, ".parquet")
+    val_pred_path = eval_dir / _name("val_pred_gnn", run_suffix, ".parquet")
+    test_pred_path = eval_dir / _name("test_pred_gnn", run_suffix, ".parquet")
 
     train_pred.to_parquet(train_pred_path, index=False)
     val_pred.to_parquet(val_pred_path, index=False)
     test_pred.to_parquet(test_pred_path, index=False)
 
-    print(f"[A5] Saved preds: {train_pred_path}")
-    print(f"[A5] Saved preds: {val_pred_path}")
-    print(f"[A5] Saved preds: {test_pred_path}")
+    print(f"[A5][{run_suffix}] Saved preds: {val_pred_path} (and train/test)")
 
     out = {
+        "run_suffix": run_suffix,
         "train": train_metrics,
         "val": val_metrics,
         "test": test_metrics,
@@ -403,17 +456,19 @@ def main() -> None:
         "config": {
             **asdict(cfg),
             "embed_dim": int(embed_dim),
-            "seed": int(seed),
+            "seed": int(args.seed),
+            "device": device.type,
         },
         "sampler": {
+            "neighbors_list": neighbors_list,
             "num_neighbors": {str(k): v for k, v in num_neighbors.items()},
-            "batch_size_train": int(batch_size_train),
-            "batch_size_eval": int(batch_size_eval),
+            "batch_size_train": int(args.batch_size_train),
+            "batch_size_eval": int(args.batch_size_eval),
         },
         "training": {
-            "max_epochs": int(max_epochs),
-            "patience": int(patience),
-            "early_stop_delta": float(early_stop_delta),
+            "max_epochs": int(args.max_epochs),
+            "patience": int(args.patience),
+            "early_stop_delta": float(args.early_stop_delta),
             "best_val_logloss": float(best_val),
             "best_epoch": best_epoch,
             "stopped_epoch": stopped_epoch,
@@ -422,7 +477,6 @@ def main() -> None:
             "impute": "median",
             "scale": "standardize",
             "tx_scaler_path": str(tx_scaler_path).replace("\\", "/"),
-            "scaler_info_saved": True,
         },
         "class_balance": {
             "pos": int(pos),
@@ -431,16 +485,34 @@ def main() -> None:
         },
     }
 
-    metrics_path = eval_dir / "gnn_metrics.json"
+    metrics_path = eval_dir / _name("gnn_metrics", run_suffix, ".json")
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
     precision, recall, _ = pr_curve_points(y_val, p_val)
-    pr_path = eval_dir / "pr_curve_gnn.png"
-    plot_pr_curve(precision, recall, str(pr_path), title="PR Curve (GNN, VAL)")
+    pr_path = eval_dir / _name("pr_curve_gnn", run_suffix, ".png")
+    plot_pr_curve(precision, recall, str(pr_path), title=f"PR Curve (GNN, VAL) — {run_suffix}")
 
-    print(f"[A5] Saved metrics: {metrics_path}")
-    print(f"[A5] Saved PR curve: {pr_path}")
+    print(f"[A5][{run_suffix}] Saved metrics: {metrics_path}")
+    print(f"[A5][{run_suffix}] Saved PR curve: {pr_path}")
+
+    # --- default artifacts for pipeline compatibility
+    # Пишем стандартные имена, если:
+    # 1) явно попросили --write-default-artifacts
+    # 2) это не “абляционный” прогон (tag != 'ablation')
+    write_default = bool(args.write_default_artifacts) or (str(args.tag or "").lower() != "ablation")
+
+    if write_default:
+        torch.save(model.state_dict(), graph_dir / "gnn_model.pt")
+        train_pred.to_parquet(eval_dir / "train_pred_gnn.parquet", index=False)
+        val_pred.to_parquet(eval_dir / "val_pred_gnn.parquet", index=False)
+        test_pred.to_parquet(eval_dir / "test_pred_gnn.parquet", index=False)
+
+        with open(eval_dir / "gnn_metrics.json", "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+
+        plot_pr_curve(precision, recall, str(eval_dir / "pr_curve_gnn.png"), title="PR Curve (GNN, VAL)")
+
     print("[A5] Done.")
 
 

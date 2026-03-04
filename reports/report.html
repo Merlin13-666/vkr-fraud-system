@@ -40,6 +40,7 @@
         <li><a href="#comparison">Сравнение моделей</a></li>
         <li><a href="#graph">Визуализация графа</a></li>
         <li><a href="#meta">Воспроизводимость</a></li>
+        <li><a href="#ablation">Абляции GNN</a></li>
       </ul>
     </div>
     
@@ -323,7 +324,149 @@
 <div class='card'><h3>PR-кривая: Tabular (LightGBM) — VAL</h3><img src="assets/pr_curve_tabular.png" alt="pr_curve_tabular.png"/></div>
 <div class='card'><h3>PR-кривая: Graph-metrics baseline — VAL</h3><img src="assets/pr_curve_graph_metrics.png" alt="pr_curve_graph_metrics.png"/></div>
 <div class='card'><h3>PR-кривая: GNN (индуктивно) — VAL</h3><img src="assets/pr_curve_gnn_external_val.png" alt="pr_curve_gnn_external_val.png"/></div></div>
-
+        
+        
+                <div class='card' id='ablation'>
+                  <h2>GNN Ablation (A5.2)</h2>
+                  <div class='muted small'>
+                    source: <a href="../artifacts/evaluation/gnn_ablation.csv">gnn_ablation.csv</a>
+                  </div>
+                  <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>run</th>
+      <th>num_layers</th>
+      <th>hidden_dim</th>
+      <th>embed_dim</th>
+      <th>neighbors</th>
+      <th>val_pr_auc</th>
+      <th>val_logloss</th>
+      <th>val_roc_auc</th>
+      <th>test_pr_auc</th>
+      <th>test_logloss</th>
+      <th>test_roc_auc</th>
+      <th>metrics_path</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>L1_H64_E32_N15-10</td>
+      <td>1</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.392744</td>
+      <td>0.257550</td>
+      <td>0.810964</td>
+      <td>0.287863</td>
+      <td>0.281335</td>
+      <td>0.760727</td>
+      <td>artifacts/evaluation/gnn_metrics__L1_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L1_H64_E64_N15-10</td>
+      <td>1</td>
+      <td>64</td>
+      <td>64</td>
+      <td>15,10</td>
+      <td>0.409920</td>
+      <td>0.258630</td>
+      <td>0.823598</td>
+      <td>0.271160</td>
+      <td>0.281314</td>
+      <td>0.755917</td>
+      <td>artifacts/evaluation/gnn_metrics__L1_H64_E64_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L2_H64_E32_N15-10</td>
+      <td>2</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.393514</td>
+      <td>0.249388</td>
+      <td>0.803782</td>
+      <td>0.280135</td>
+      <td>0.275405</td>
+      <td>0.749315</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L2_H64_E64_N15-10</td>
+      <td>2</td>
+      <td>64</td>
+      <td>64</td>
+      <td>15,10</td>
+      <td>0.383348</td>
+      <td>0.255080</td>
+      <td>0.804521</td>
+      <td>0.262192</td>
+      <td>0.278127</td>
+      <td>0.742413</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E64_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L3_H64_E32_N15-10</td>
+      <td>3</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.401780</td>
+      <td>0.255273</td>
+      <td>0.815300</td>
+      <td>0.256422</td>
+      <td>0.289590</td>
+      <td>0.753604</td>
+      <td>artifacts/evaluation/gnn_metrics__L3_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L3_H64_E64_N15-10</td>
+      <td>3</td>
+      <td>64</td>
+      <td>64</td>
+      <td>15,10</td>
+      <td>0.389030</td>
+      <td>0.257381</td>
+      <td>0.801378</td>
+      <td>0.246273</td>
+      <td>0.278277</td>
+      <td>0.747985</td>
+      <td>artifacts/evaluation/gnn_metrics__L3_H64_E64_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L2_H64_E32_N10-5</td>
+      <td>2</td>
+      <td>64</td>
+      <td>32</td>
+      <td>10,5</td>
+      <td>0.403876</td>
+      <td>0.246812</td>
+      <td>0.798408</td>
+      <td>0.290443</td>
+      <td>0.269503</td>
+      <td>0.742230</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E32_N10-5.json</td>
+    </tr>
+    <tr>
+      <td>L2_H64_E64_N10-5</td>
+      <td>2</td>
+      <td>64</td>
+      <td>64</td>
+      <td>10,5</td>
+      <td>0.387755</td>
+      <td>0.283495</td>
+      <td>0.807580</td>
+      <td>0.254481</td>
+      <td>0.305892</td>
+      <td>0.743922</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E64_N10-5.json</td>
+    </tr>
+  </tbody>
+</table>
+                  <h3>PR-AUC vs num_layers</h3><img src="assets/gnn_ablation_pr_auc_vs_layers.png" alt="gnn_ablation_pr_auc_vs_layers.png"/>
+                </div>
+                
+        
         <h2>Политика порогов</h2>
         <div class='grid'>
         <div class='card'>
@@ -564,8 +707,8 @@
     <div class="card" id="meta">
       <h2>Воспроизводимость</h2>
       <div class="small muted">
-        generated_at: <span class="mono">2026-03-03 23:47:34</span><br/>
-        git_commit: <span class="mono">44ea571</span><br/>
+        generated_at: <span class="mono">2026-03-04 06:48:12</span><br/>
+        git_commit: <span class="mono">2a4432e</span><br/>
         python: <span class="mono">3.11.9</span><br/>
       </div>
       <details>
