@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import torch
 import pandas as pd
@@ -10,9 +11,13 @@ from fraud_system.graph.pyg_build import build_heterodata
 def _ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
+def _dir_from_env(env_name: str, default: str) -> Path:
+    v = os.environ.get(env_name, "").strip()
+    return Path(v) if v else Path(default)
 
 def main() -> None:
-    graph_dir = Path("artifacts/graph")
+    graph_dir = _dir_from_env("FRAUD_GRAPH_DIR", "artifacts/graph")
+    _ensure_dir(graph_dir)
     node_map_path = graph_dir / "node_map.parquet"
     edges_path = graph_dir / "edges.parquet"
 

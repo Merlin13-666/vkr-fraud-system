@@ -5,7 +5,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 
 
 def _run_module(module: str, args: Optional[List[str]] = None) -> None:
@@ -36,16 +36,24 @@ class Step:
 
 
 def _should_run(step: Step, force: bool) -> bool:
+    # если force=True — всегда запускаем
+    # иначе — запускаем только если НЕ все outputs уже существуют
     return True if force else (not _exists_all(step.outputs))
 
 
 def _resolve_graph_pred_path(user_path: str) -> str:
+    """
+    Для граф-визуализации: если пользователь указал несуществующий путь к pred parquet,
+    пытаемся взять разумный fallback.
+    """
     p = Path(user_path)
     if p.exists():
-        return user_path
+        return str(p).replace("\\", "/")
+
     fallback = Path("artifacts/evaluation/test_pred_fusion_external.parquet")
     if fallback.exists():
         return str(fallback).replace("\\", "/")
+
     return user_path
 
 
@@ -58,7 +66,13 @@ def build_steps(
     graph_hops: int,
     graph_max_nodes: int,
     graph_max_edges: int,
+    robustness_drops: str,
+    device: str,
 ) -> List[Step]:
+
+    # -------------------------
+    # A2 Prepare
+    # -------------------------
     s_prepare = Step(
         key="A2_prepare",
         title="Prepare data (merge + schema + time split)",
@@ -73,17 +87,9 @@ def build_steps(
         module_args=[],
     )
 
-    s_gnn_ablation = Step(
-        key="A5_2_ablation_gnn",
-        title="GNN ablation grid (lite): layers/embed_dim/neighbors",
-        outputs=[
-            _p("artifacts", "evaluation", "gnn_ablation.csv"),
-            _p("artifacts", "evaluation", "gnn_ablation_pr_auc_vs_layers.png"),
-        ],
-        module="scripts.19_ablation_gnn",
-        module_args=["--device", "cpu"],  # или без args, если в 19 есть дефолты
-    )
-
+    # -------------------------
+    # A3 Tabular
+    # -------------------------
     s_tabular = Step(
         key="A3_tabular",
         title="Train tabular (LightGBM) + preds",
@@ -99,6 +105,9 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A4 Graph build
+    # -------------------------
     s_build_graph = Step(
         key="A4_build_graph",
         title="Build graph artifacts (node_map + edges)",
@@ -114,7 +123,10 @@ def build_steps(
     s_make_graph_data = Step(
         key="A4_make_graph_data",
         title="Convert to PyG HeteroData",
-        outputs=[_p("artifacts", "graph", "graph_data.pt"), _p("artifacts", "graph", "tx_index.parquet")],
+        outputs=[
+            _p("artifacts", "graph", "graph_data.pt"),
+            _p("artifacts", "graph", "tx_index.parquet"),
+        ],
         module="scripts.03_make_graph_data",
         module_args=[],
     )
@@ -133,6 +145,9 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A6.1 Baseline без GNN
+    # -------------------------
     s_graph_metrics_baseline = Step(
         key="A6_1_graph_metrics_baseline",
         title="Graph-metrics baseline (A6.1)",
@@ -147,6 +162,9 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A5 GNN internal
+    # -------------------------
     s_train_gnn = Step(
         key="A5_train_gnn",
         title="Train GNN (internal) + preds",
@@ -159,9 +177,12 @@ def build_steps(
             _p("artifacts", "graph", "tx_scaler.json"),
         ],
         module="scripts.04_train_gnn",
-        module_args=[],
+        module_args=["--device", device],
     )
 
+    # -------------------------
+    # A6 Fusion internal (абляция/отладка)
+    # -------------------------
     s_fusion_internal = Step(
         key="A6_fusion_internal",
         title="Train fusion internal (ablation/debug)",
@@ -176,10 +197,16 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A9 External GNN (inductive) + calibration
+    # -------------------------
     s_gnn_external_val = Step(
         key="A9_gnn_external_val",
         title="Inductive GNN predict (external VAL)",
-        outputs=[_p("artifacts", "evaluation", "val_pred_gnn_external.parquet"), _p("artifacts", "evaluation", "gnn_external_metrics_val.json")],
+        outputs=[
+            _p("artifacts", "evaluation", "val_pred_gnn_external.parquet"),
+            _p("artifacts", "evaluation", "gnn_external_metrics_val.json"),
+        ],
         module="scripts.08_predict_gnn_external",
         module_args=["--split", "val"],
     )
@@ -187,7 +214,10 @@ def build_steps(
     s_gnn_external_test = Step(
         key="A9_gnn_external_test",
         title="Inductive GNN predict (external TEST)",
-        outputs=[_p("artifacts", "evaluation", "test_pred_gnn_external.parquet"), _p("artifacts", "evaluation", "gnn_external_metrics_test.json")],
+        outputs=[
+            _p("artifacts", "evaluation", "test_pred_gnn_external.parquet"),
+            _p("artifacts", "evaluation", "gnn_external_metrics_test.json"),
+        ],
         module="scripts.08_predict_gnn_external",
         module_args=["--split", "test"],
     )
@@ -204,6 +234,9 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A10 Fusion external (honest)
+    # -------------------------
     s_fusion_external = Step(
         key="A10_fusion_external",
         title="Train fusion external (honest) + preds",
@@ -218,6 +251,9 @@ def build_steps(
         module_args=[],
     )
 
+    # -------------------------
+    # A7 Evaluate: thresholds + zones + cost
+    # -------------------------
     s_evaluate = Step(
         key="A7_evaluate",
         title="Evaluate + thresholds + decision zones + cost",
@@ -239,9 +275,46 @@ def build_steps(
         module_args=[],
     )
 
-    # graph viz args
+    # -------------------------
+    # A5.2 Ablation (lite)
+    # -------------------------
+    s_gnn_ablation = Step(
+        key="A5_2_ablation_gnn",
+        title="GNN ablation grid (lite): layers/embed_dim/neighbors",
+        outputs=[
+            _p("artifacts", "evaluation", "gnn_ablation.csv"),
+            _p("artifacts", "evaluation", "gnn_ablation_pr_auc_vs_layers.png"),
+        ],
+        module="scripts.19_ablation_gnn",
+        module_args=["--device", device],
+    )
+
+    # -------------------------
+    # A4.4 Robustness
+    # -------------------------
+    s_graph_robustness = Step(
+        key="A4_4_graph_robustness",
+        title="Graph robustness (edge dropout) (A4.4)",
+        outputs=[
+            _p("artifacts", "evaluation", "robustness", "graph_robustness.csv"),
+            # у тебя сейчас может быть несколько графиков (internal/external). оставим самый базовый
+            _p("artifacts", "evaluation", "robustness", "graph_robustness_pr_auc_vs_drop.png"),
+        ],
+        module="scripts.20_graph_robustness",
+        module_args=["--drops", robustness_drops, "--device", device],
+    )
+
+    # -------------------------
+    # A11 Graph Viz + Report
+    # -------------------------
     resolved_pred_path = _resolve_graph_pred_path(graph_pred_path)
-    gv_args: List[str] = ["--mode", graph_mode, "--hops", str(graph_hops), "--max-nodes", str(graph_max_nodes), "--max-edges", str(graph_max_edges)]
+    gv_args: List[str] = [
+        "--mode", graph_mode,
+        "--hops", str(graph_hops),
+        "--max-nodes", str(graph_max_nodes),
+        "--max-edges", str(graph_max_edges),
+    ]
+
     if graph_mode == "ego_tx":
         if graph_tx_id is not None:
             gv_args += ["--tx-id", str(graph_tx_id)]
@@ -268,6 +341,7 @@ def build_steps(
         module_args=[],
     )
 
+    # ВАЖНО: ablation/robustness ДО отчёта, чтобы отчёт их подхватил
     return [
         s_prepare,
         s_tabular,
@@ -282,34 +356,48 @@ def build_steps(
         s_gnn_calibrate,
         s_fusion_external,
         s_evaluate,
+        s_gnn_ablation,
+        s_graph_robustness,
         s_graph_viz,
         s_report,
-        s_gnn_ablation
     ]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="VKR Fraud System — One-click runner (A12)")
-    parser.add_argument("--force", action="store_true")
 
-    parser.add_argument("--only-report", action="store_true", help="Run only A11_graph_viz + A11_auto_report (expects artifacts exist)")
-    parser.add_argument("--only-graph-metrics", action="store_true", help="Run only A6.1 graph-metrics baseline (expects A4 artifacts exist)")
+    # common
+    parser.add_argument("--force", action="store_true", help="Run all steps even if outputs exist")
 
-    parser.add_argument("--from-step", type=str, default=None)
-    parser.add_argument("--to-step", type=str, default=None)
+    # shortcuts
+    parser.add_argument("--only-report", action="store_true",
+                        help="Run only A11_graph_viz + A11_auto_report (expects artifacts exist)")
+    parser.add_argument("--only-graph-metrics", action="store_true",
+                        help="Run only A6.1 graph-metrics baseline (expects A4 artifacts exist)")
 
+    # slicing
+    parser.add_argument("--from-step", type=str, default=None, help="Start from step key")
+    parser.add_argument("--to-step", type=str, default=None, help="Stop after step key")
+    parser.add_argument("--list-steps", action="store_true", help="Print step keys and exit")
+
+    # toggles
+    parser.add_argument("--skip-ablation", action="store_true")
+    parser.add_argument("--skip-robustness", action="store_true")
+    parser.add_argument("--skip-graph-viz", action="store_true")
+
+    # device / robustness
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
+    parser.add_argument("--robustness-drops", type=str, default="0.1,0.3,0.5,0.75")
+
+    # graph viz options
     parser.add_argument("--graph-mode", choices=["ego_tx", "ego_entity"], default="ego_tx")
     parser.add_argument("--graph-tx-id", type=int, default=None)
     parser.add_argument("--graph-entity-type", type=str, default=None)
     parser.add_argument("--graph-entity-value", type=str, default=None)
-    parser.add_argument("--graph-pred-path", type=str, default="artifacts/evaluation/val_pred_fusion_internal.parquet")
+    parser.add_argument("--graph-pred-path", type=str, default="artifacts/evaluation/test_pred_fusion_external.parquet")
     parser.add_argument("--graph-hops", type=int, default=2)
     parser.add_argument("--graph-max-nodes", type=int, default=1500)
     parser.add_argument("--graph-max-edges", type=int, default=3000)
-
-    parser.add_argument("--skip-ablation", action="store_true")
-    parser.add_argument("--skip-ablation", action="store_true")
-    parser.add_argument("--only-report", action="store_true")
 
     args = parser.parse_args()
 
@@ -322,10 +410,25 @@ def main() -> None:
         graph_hops=args.graph_hops,
         graph_max_nodes=args.graph_max_nodes,
         graph_max_edges=args.graph_max_edges,
+        robustness_drops=args.robustness_drops,
+        device=args.device,
     )
 
+    if args.list_steps:
+        print("Steps:")
+        for s in steps:
+            print(f"  {s.key}  - {s.title}")
+        return
+
+    # filters
     if args.skip_ablation:
         steps = [s for s in steps if s.key != "A5_2_ablation_gnn"]
+
+    if args.skip_robustness:
+        steps = [s for s in steps if s.key != "A4_4_graph_robustness"]
+
+    if args.skip_graph_viz:
+        steps = [s for s in steps if s.key != "A11_graph_viz"]
 
     if args.only_graph_metrics:
         steps = [s for s in steps if s.key == "A6_1_graph_metrics_baseline"]
@@ -333,6 +436,7 @@ def main() -> None:
     if args.only_report:
         steps = [s for s in steps if s.key in {"A11_graph_viz", "A11_auto_report"}]
 
+    # slicing by keys
     if args.from_step:
         keys = [s.key for s in steps]
         if args.from_step not in keys:
@@ -345,18 +449,8 @@ def main() -> None:
             raise ValueError(f"--to-step unknown: {args.to_step}. Known: {keys}")
         steps = steps[: keys.index(args.to_step) + 1]
 
-    if not args.skip_gnn:
-        steps.append(args.s_train_gnn)
-
-        # >>> A5.2 ablation (iteration 3)
-        if not args.skip_ablation:
-            steps.append(args.s_gnn_ablation)
-
-        if not args.skip_internal_fusion:
-            steps.append(args.s_fusion_internal)
-
     print("VKR Fraud System: one-click runner (A12)")
-    print(f"force={args.force}")
+    print(f"force={args.force}  device={args.device}")
     print(f"graph: mode={args.graph_mode}, tx_id={args.graph_tx_id}, pred_path={args.graph_pred_path}, hops={args.graph_hops}")
 
     results: Dict[str, str] = {}
@@ -368,12 +462,13 @@ def main() -> None:
         if not need:
             results[step.key] = "SKIPPED"
             continue
+
         _run_module(step.module, step.module_args)
         results[step.key] = "OK"
 
     print("\n[SUMMARY]")
-    for k in [s.key for s in steps]:
-        print(f"  {k}: {results.get(k, 'N/A')}")
+    for s in steps:
+        print(f"  {s.key}: {results.get(s.key, 'N/A')}")
 
     report_path = _p("reports", "report.html")
     if report_path.exists():

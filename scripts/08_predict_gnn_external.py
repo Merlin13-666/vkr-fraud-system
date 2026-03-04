@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 from pathlib import Path
 from typing import Dict, Any
@@ -19,6 +20,9 @@ from fraud_system.graph.inductive import load_node_map, load_tx_scaler, build_in
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+def _dir_from_env(env_name: str, default: str) -> Path:
+    v = os.environ.get(env_name, "").strip()
+    return Path(v) if v else Path(default)
 
 def _load_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
@@ -66,10 +70,11 @@ def main() -> None:
 
     device = torch.device("cpu")
 
-    graph_dir = Path("artifacts/graph")
-    eval_dir = Path("artifacts/evaluation")
+    graph_dir = _dir_from_env("FRAUD_GRAPH_DIR", "artifacts/graph")
+    eval_dir = _dir_from_env("FRAUD_EVAL_DIR", "artifacts/evaluation")
     processed_dir = Path("data/processed")
     _ensure_dir(eval_dir)
+    _ensure_dir(graph_dir)
 
     df_ext = pd.read_parquet(processed_dir / f"{args.split}.parquet")
     if "transaction_id" not in df_ext.columns or "target" not in df_ext.columns:

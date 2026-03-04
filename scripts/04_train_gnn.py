@@ -4,6 +4,7 @@ import argparse
 import json
 import random
 from dataclasses import asdict
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -25,6 +26,9 @@ from fraud_system.evaluation.plots import plot_pr_curve
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+def _dir_from_env(env_name: str, default: str) -> Path:
+    v = os.environ.get(env_name, "").strip()
+    return Path(v) if v else Path(default)
 
 def _set_seed(seed: int) -> None:
     random.seed(seed)
@@ -200,8 +204,8 @@ def main() -> None:
 
     _set_seed(args.seed)
 
-    graph_dir = Path("artifacts/graph")
-    eval_dir = Path("artifacts/evaluation")
+    graph_dir = _dir_from_env("FRAUD_GRAPH_DIR", "artifacts/graph")
+    eval_dir = _dir_from_env("FRAUD_EVAL_DIR", "artifacts/evaluation")
     data_dir = Path("data/processed")
 
     _ensure_dir(graph_dir)

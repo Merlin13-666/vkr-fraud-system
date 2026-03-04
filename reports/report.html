@@ -22,6 +22,7 @@
       .pill { display:inline-block; padding:2px 8px; border-radius: 999px; border: 1px solid #ddd; background:#fafafa; }
       .toc a { text-decoration: none; }
       .toc li { margin: 4px 0; }
+      th, td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     </style>
     
       </head>
@@ -40,7 +41,7 @@
         <li><a href="#comparison">Сравнение моделей</a></li>
         <li><a href="#graph">Визуализация графа</a></li>
         <li><a href="#meta">Воспроизводимость</a></li>
-        <li><a href="#ablation">Абляции GNN</a></li>
+        <li><a href="#experiments">Experiments (A5.2 / A4.4)</a></li>
       </ul>
     </div>
     
@@ -94,19 +95,19 @@
           <div class="grid">
             <div>
               <b>Размеры</b><br/>
-              train: <code>None</code><br/>
-              val: <code>None</code><br/>
-              test: <code>None</code>
+              train: <code>311553</code><br/>
+              val: <code>103851</code><br/>
+              test: <code>103852</code>
             </div>
             <div>
               <b>Fraud rate</b><br/>
-              train: <code>0.000000</code><br/>
-              val: <code>0.000000</code><br/>
-              test: <code>0.000000</code>
+              train: <code>0.033811</code><br/>
+              val: <code>0.039672</code><br/>
+              test: <code>0.033191</code>
             </div>
           </div>
           <div class="muted small">
-            source: <a href="../data/splits/split_info.json">data/splits/split_info.json</a>
+            source: <a href="tables/split_info.json">tables/split_info.json</a>
           </div>
         </div>
         
@@ -118,7 +119,7 @@
         Таблица сохранена: <a href="tables/model_comparison.csv">model_comparison.csv</a>.
         Сортировка: основной режим <code>fusion_external</code> сверху, затем по <code>TEST PR-AUC</code> и <code>TEST logloss</code>.
       </div>
-      <table border="1" class="dataframe">
+      <div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>model_key</th>
@@ -193,32 +194,12 @@
       <td>0.705191</td>
     </tr>
   </tbody>
-</table>
+</table></div>
     </div>
     
 
         <h2>Метрики по моделям</h2>
         
-            <div class="card">
-              <h3>Гибридная модель (Tabular + GNN), честный режим (future split)</h3>
-              <div class="muted small">key: <code>fusion_external</code> | trained_on=external_val | used_gnn=calibrated</div>
-              <div class="grid">
-                <div>
-                  <b>VAL</b><br/>
-                  logloss: <code>0.095324</code><br/>
-                  PR-AUC: <code>0.589855</code><br/>
-                  ROC-AUC: <code>0.910823</code>
-                </div>
-                <div>
-                  <b>TEST</b><br/>
-                  logloss: <code>0.089437</code><br/>
-                  PR-AUC: <code>0.518235</code><br/>
-                  ROC-AUC: <code>0.904008</code>
-                </div>
-              </div>
-            </div>
-            
-
             <div class="card">
               <h3>Tabular (LightGBM)</h3>
               <div class="muted small">key: <code>tabular</code></div>
@@ -280,6 +261,26 @@
             
 
             <div class="card">
+              <h3>GNN (индуктивно, future split)</h3>
+              <div class="muted small">key: <code>gnn_external</code></div>
+              <div class="grid">
+                <div>
+                  <b>VAL</b><br/>
+                  logloss: <code>0.252660</code><br/>
+                  PR-AUC: <code>0.220032</code><br/>
+                  ROC-AUC: <code>0.751364</code>
+                </div>
+                <div>
+                  <b>TEST</b><br/>
+                  logloss: <code>0.241534</code><br/>
+                  PR-AUC: <code>0.195484</code><br/>
+                  ROC-AUC: <code>0.712946</code>
+                </div>
+              </div>
+            </div>
+            
+
+            <div class="card">
               <h3>Fusion (internal, только для абляции)</h3>
               <div class="muted small">key: <code>fusion_internal</code></div>
               <div class="grid">
@@ -300,20 +301,20 @@
             
 
             <div class="card">
-              <h3>GNN (индуктивно, future split)</h3>
-              <div class="muted small">key: <code>gnn_external</code></div>
+              <h3>Гибридная модель (Tabular + GNN), честный режим (future split)</h3>
+              <div class="muted small">key: <code>fusion_external</code> | trained_on=external_val | used_gnn=calibrated</div>
               <div class="grid">
                 <div>
                   <b>VAL</b><br/>
-                  logloss: <code>0.252660</code><br/>
-                  PR-AUC: <code>0.220032</code><br/>
-                  ROC-AUC: <code>0.751364</code>
+                  logloss: <code>0.095324</code><br/>
+                  PR-AUC: <code>0.589855</code><br/>
+                  ROC-AUC: <code>0.910823</code>
                 </div>
                 <div>
                   <b>TEST</b><br/>
-                  logloss: <code>0.241534</code><br/>
-                  PR-AUC: <code>0.195484</code><br/>
-                  ROC-AUC: <code>0.712946</code>
+                  logloss: <code>0.089437</code><br/>
+                  PR-AUC: <code>0.518235</code><br/>
+                  ROC-AUC: <code>0.904008</code>
                 </div>
               </div>
             </div>
@@ -325,13 +326,21 @@
 <div class='card'><h3>PR-кривая: Graph-metrics baseline — VAL</h3><img src="assets/pr_curve_graph_metrics.png" alt="pr_curve_graph_metrics.png"/></div>
 <div class='card'><h3>PR-кривая: GNN (индуктивно) — VAL</h3><img src="assets/pr_curve_gnn_external_val.png" alt="pr_curve_gnn_external_val.png"/></div></div>
         
-        
-                <div class='card' id='ablation'>
-                  <h2>GNN Ablation (A5.2)</h2>
-                  <div class='muted small'>
-                    source: <a href="../artifacts/evaluation/gnn_ablation.csv">gnn_ablation.csv</a>
-                  </div>
-                  <table border="1" class="dataframe">
+        <div class='card' id='experiments'>
+<h2>Experiments: Ablation & Robustness</h2>
+
+    <div class='muted'>
+      <b>Смысл эксперимента:</b> искусственно удаляем долю рёбер (edge dropout), моделируя неполноту/ошибки связей в графе.
+      Оценка приводится в <b>external (future split)</b> режиме и (если настроено) усредняется по нескольким seed для устойчивости.
+    </div>
+    
+<div class='muted'>Короткие эксперименты для обоснования параметров GNN и оценки устойчивости к деградации графа.</div>
+<h3>GNN Ablation (A5.2)</h3>
+<div class='grid'>
+<img src='assets/gnn_ablation_pr_auc_vs_layers.png' />
+<div class='card'><h4>PR-AUC vs layers</h4><img src='../artifacts/evaluation/gnn_ablation_pr_auc_vs_layers.png' /></div>
+<div class='card'><h4>Top runs</h4>
+<div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>run</th>
@@ -350,20 +359,6 @@
   </thead>
   <tbody>
     <tr>
-      <td>L1_H64_E32_N15-10</td>
-      <td>1</td>
-      <td>64</td>
-      <td>32</td>
-      <td>15,10</td>
-      <td>0.392744</td>
-      <td>0.257550</td>
-      <td>0.810964</td>
-      <td>0.287863</td>
-      <td>0.281335</td>
-      <td>0.760727</td>
-      <td>artifacts/evaluation/gnn_metrics__L1_H64_E32_N15-10.json</td>
-    </tr>
-    <tr>
       <td>L1_H64_E64_N15-10</td>
       <td>1</td>
       <td>64</td>
@@ -376,62 +371,6 @@
       <td>0.281314</td>
       <td>0.755917</td>
       <td>artifacts/evaluation/gnn_metrics__L1_H64_E64_N15-10.json</td>
-    </tr>
-    <tr>
-      <td>L2_H64_E32_N15-10</td>
-      <td>2</td>
-      <td>64</td>
-      <td>32</td>
-      <td>15,10</td>
-      <td>0.393514</td>
-      <td>0.249388</td>
-      <td>0.803782</td>
-      <td>0.280135</td>
-      <td>0.275405</td>
-      <td>0.749315</td>
-      <td>artifacts/evaluation/gnn_metrics__L2_H64_E32_N15-10.json</td>
-    </tr>
-    <tr>
-      <td>L2_H64_E64_N15-10</td>
-      <td>2</td>
-      <td>64</td>
-      <td>64</td>
-      <td>15,10</td>
-      <td>0.383348</td>
-      <td>0.255080</td>
-      <td>0.804521</td>
-      <td>0.262192</td>
-      <td>0.278127</td>
-      <td>0.742413</td>
-      <td>artifacts/evaluation/gnn_metrics__L2_H64_E64_N15-10.json</td>
-    </tr>
-    <tr>
-      <td>L3_H64_E32_N15-10</td>
-      <td>3</td>
-      <td>64</td>
-      <td>32</td>
-      <td>15,10</td>
-      <td>0.401780</td>
-      <td>0.255273</td>
-      <td>0.815300</td>
-      <td>0.256422</td>
-      <td>0.289590</td>
-      <td>0.753604</td>
-      <td>artifacts/evaluation/gnn_metrics__L3_H64_E32_N15-10.json</td>
-    </tr>
-    <tr>
-      <td>L3_H64_E64_N15-10</td>
-      <td>3</td>
-      <td>64</td>
-      <td>64</td>
-      <td>15,10</td>
-      <td>0.389030</td>
-      <td>0.257381</td>
-      <td>0.801378</td>
-      <td>0.246273</td>
-      <td>0.278277</td>
-      <td>0.747985</td>
-      <td>artifacts/evaluation/gnn_metrics__L3_H64_E64_N15-10.json</td>
     </tr>
     <tr>
       <td>L2_H64_E32_N10-5</td>
@@ -448,6 +387,62 @@
       <td>artifacts/evaluation/gnn_metrics__L2_H64_E32_N10-5.json</td>
     </tr>
     <tr>
+      <td>L3_H64_E32_N15-10</td>
+      <td>3</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.401780</td>
+      <td>0.255273</td>
+      <td>0.815300</td>
+      <td>0.256422</td>
+      <td>0.289590</td>
+      <td>0.753604</td>
+      <td>artifacts/evaluation/gnn_metrics__L3_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L2_H64_E32_N15-10</td>
+      <td>2</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.393514</td>
+      <td>0.249388</td>
+      <td>0.803782</td>
+      <td>0.280135</td>
+      <td>0.275405</td>
+      <td>0.749315</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L1_H64_E32_N15-10</td>
+      <td>1</td>
+      <td>64</td>
+      <td>32</td>
+      <td>15,10</td>
+      <td>0.392744</td>
+      <td>0.257550</td>
+      <td>0.810964</td>
+      <td>0.287863</td>
+      <td>0.281335</td>
+      <td>0.760727</td>
+      <td>artifacts/evaluation/gnn_metrics__L1_H64_E32_N15-10.json</td>
+    </tr>
+    <tr>
+      <td>L3_H64_E64_N15-10</td>
+      <td>3</td>
+      <td>64</td>
+      <td>64</td>
+      <td>15,10</td>
+      <td>0.389030</td>
+      <td>0.257381</td>
+      <td>0.801378</td>
+      <td>0.246273</td>
+      <td>0.278277</td>
+      <td>0.747985</td>
+      <td>artifacts/evaluation/gnn_metrics__L3_H64_E64_N15-10.json</td>
+    </tr>
+    <tr>
       <td>L2_H64_E64_N10-5</td>
       <td>2</td>
       <td>64</td>
@@ -461,11 +456,184 @@
       <td>0.743922</td>
       <td>artifacts/evaluation/gnn_metrics__L2_H64_E64_N10-5.json</td>
     </tr>
+    <tr>
+      <td>L2_H64_E64_N15-10</td>
+      <td>2</td>
+      <td>64</td>
+      <td>64</td>
+      <td>15,10</td>
+      <td>0.383348</td>
+      <td>0.255080</td>
+      <td>0.804521</td>
+      <td>0.262192</td>
+      <td>0.278127</td>
+      <td>0.742413</td>
+      <td>artifacts/evaluation/gnn_metrics__L2_H64_E64_N15-10.json</td>
+    </tr>
   </tbody>
-</table>
-                  <h3>PR-AUC vs num_layers</h3><img src="assets/gnn_ablation_pr_auc_vs_layers.png" alt="gnn_ablation_pr_auc_vs_layers.png"/>
-                </div>
-                
+</table></div>
+<div class='muted small'>source: <a href="../artifacts/evaluation/gnn_ablation.csv">gnn_ablation.csv</a></div>
+</div>
+</div>
+<h3>Graph Robustness: edge dropout (A4.4)</h3>
+<div class='grid'>
+<div class='card'><h4>PR-AUC vs edge drop%</h4><img src='assets/graph_robustness_pr_auc_vs_drop.png' /></div>
+<div class='card'><h4>Summary table</h4>
+<div class='table-wrap'><table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>drop_pct</th>
+      <th>edges_kept_mean</th>
+      <th>edges_kept_std</th>
+      <th>gnn_int_val_pr_auc_mean</th>
+      <th>gnn_int_val_pr_auc_std</th>
+      <th>gnn_int_val_logloss_mean</th>
+      <th>gnn_int_val_logloss_std</th>
+      <th>gnn_int_test_pr_auc_mean</th>
+      <th>gnn_int_test_pr_auc_std</th>
+      <th>gnn_int_test_logloss_mean</th>
+      <th>gnn_int_test_logloss_std</th>
+      <th>gnn_ext_val_pr_auc_mean</th>
+      <th>gnn_ext_val_pr_auc_std</th>
+      <th>gnn_ext_val_logloss_mean</th>
+      <th>gnn_ext_val_logloss_std</th>
+      <th>gnn_ext_test_pr_auc_mean</th>
+      <th>gnn_ext_test_pr_auc_std</th>
+      <th>gnn_ext_test_logloss_mean</th>
+      <th>gnn_ext_test_logloss_std</th>
+      <th>fusion_ext_val_pr_auc_mean</th>
+      <th>fusion_ext_val_pr_auc_std</th>
+      <th>fusion_ext_val_logloss_mean</th>
+      <th>fusion_ext_val_logloss_std</th>
+      <th>fusion_ext_test_pr_auc_mean</th>
+      <th>fusion_ext_test_pr_auc_std</th>
+      <th>fusion_ext_test_logloss_mean</th>
+      <th>fusion_ext_test_logloss_std</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0.10</td>
+      <td>1937292.0</td>
+      <td>0.0</td>
+      <td>0.359052</td>
+      <td>0.012956</td>
+      <td>0.285914</td>
+      <td>0.021218</td>
+      <td>0.250731</td>
+      <td>0.025176</td>
+      <td>0.305836</td>
+      <td>0.018965</td>
+      <td>0.220998</td>
+      <td>0.017923</td>
+      <td>0.270963</td>
+      <td>0.024936</td>
+      <td>0.127365</td>
+      <td>0.051437</td>
+      <td>0.411988</td>
+      <td>0.124888</td>
+      <td>0.588954</td>
+      <td>0.000268</td>
+      <td>0.095403</td>
+      <td>0.000035</td>
+      <td>0.517692</td>
+      <td>0.000384</td>
+      <td>0.089433</td>
+      <td>0.000007</td>
+    </tr>
+    <tr>
+      <td>0.30</td>
+      <td>1506783.0</td>
+      <td>0.0</td>
+      <td>0.332881</td>
+      <td>0.014571</td>
+      <td>0.304677</td>
+      <td>0.011773</td>
+      <td>0.265315</td>
+      <td>0.013658</td>
+      <td>0.313905</td>
+      <td>0.020129</td>
+      <td>0.260405</td>
+      <td>0.026876</td>
+      <td>0.279796</td>
+      <td>0.029878</td>
+      <td>0.211265</td>
+      <td>0.011280</td>
+      <td>0.264453</td>
+      <td>0.023921</td>
+      <td>0.588392</td>
+      <td>0.000233</td>
+      <td>0.095477</td>
+      <td>0.000031</td>
+      <td>0.518454</td>
+      <td>0.001443</td>
+      <td>0.089223</td>
+      <td>0.000146</td>
+    </tr>
+    <tr>
+      <td>0.50</td>
+      <td>1076274.0</td>
+      <td>0.0</td>
+      <td>0.311071</td>
+      <td>0.013266</td>
+      <td>0.353394</td>
+      <td>0.025725</td>
+      <td>0.253842</td>
+      <td>0.015167</td>
+      <td>0.356986</td>
+      <td>0.025388</td>
+      <td>0.297408</td>
+      <td>0.031096</td>
+      <td>0.309574</td>
+      <td>0.040306</td>
+      <td>0.110374</td>
+      <td>0.072423</td>
+      <td>0.980820</td>
+      <td>0.741784</td>
+      <td>0.588354</td>
+      <td>0.000279</td>
+      <td>0.095484</td>
+      <td>0.000041</td>
+      <td>0.517430</td>
+      <td>0.001513</td>
+      <td>0.089492</td>
+      <td>0.000230</td>
+    </tr>
+    <tr>
+      <td>0.75</td>
+      <td>538137.0</td>
+      <td>0.0</td>
+      <td>0.310983</td>
+      <td>0.018920</td>
+      <td>0.374307</td>
+      <td>0.015577</td>
+      <td>0.271491</td>
+      <td>0.016047</td>
+      <td>0.375656</td>
+      <td>0.014303</td>
+      <td>0.307120</td>
+      <td>0.008320</td>
+      <td>0.282971</td>
+      <td>0.006563</td>
+      <td>0.145240</td>
+      <td>0.074986</td>
+      <td>0.586939</td>
+      <td>0.409984</td>
+      <td>0.588440</td>
+      <td>0.000675</td>
+      <td>0.095451</td>
+      <td>0.000117</td>
+      <td>0.519780</td>
+      <td>0.000683</td>
+      <td>0.089124</td>
+      <td>0.000143</td>
+    </tr>
+  </tbody>
+</table></div>
+<div class='muted small'>source: <a href="../artifacts/evaluation/robustness/graph_robustness.csv">graph_robustness.csv</a></div>
+</div>
+</div>
+</div>
         
         <h2>Политика порогов</h2>
         <div class='grid'>
@@ -493,7 +661,7 @@
         <div class='card'>
           <h3>TABULAR decision zones (VAL)</h3>
           <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_tabular_val.csv">decision_zones_tabular_val.csv</a></div>
-          <table border="1" class="dataframe">
+          <div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>zone</th>
@@ -530,14 +698,14 @@
       <td>0.998955</td>
     </tr>
   </tbody>
-</table>
+</table></div>
         </div>
         
       
         <div class='card'>
           <h3>TABULAR decision zones (TEST)</h3>
           <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_tabular_test.csv">decision_zones_tabular_test.csv</a></div>
-          <table border="1" class="dataframe">
+          <div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>zone</th>
@@ -574,14 +742,14 @@
       <td>0.998326</td>
     </tr>
   </tbody>
-</table>
+</table></div>
         </div>
         
       
         <div class='card'>
           <h3>FUSION_EXTERNAL decision zones (VAL)</h3>
           <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_fusion_external_val.csv">decision_zones_fusion_external_val.csv</a></div>
-          <table border="1" class="dataframe">
+          <div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>zone</th>
@@ -618,14 +786,14 @@
       <td>0.999506</td>
     </tr>
   </tbody>
-</table>
+</table></div>
         </div>
         
       
         <div class='card'>
           <h3>FUSION_EXTERNAL decision zones (TEST)</h3>
           <div class='muted small'>source: <a href="../artifacts/evaluation/decision_zones_fusion_external_test.csv">decision_zones_fusion_external_test.csv</a></div>
-          <table border="1" class="dataframe">
+          <div class='table-wrap'><table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>zone</th>
@@ -662,7 +830,7 @@
       <td>0.999037</td>
     </tr>
   </tbody>
-</table>
+</table></div>
         </div>
         
     </div>
@@ -707,8 +875,8 @@
     <div class="card" id="meta">
       <h2>Воспроизводимость</h2>
       <div class="small muted">
-        generated_at: <span class="mono">2026-03-04 06:48:12</span><br/>
-        git_commit: <span class="mono">2a4432e</span><br/>
+        generated_at: <span class="mono">2026-03-04 22:37:10</span><br/>
+        git_commit: <span class="mono">47a8753</span><br/>
         python: <span class="mono">3.11.9</span><br/>
       </div>
       <details>

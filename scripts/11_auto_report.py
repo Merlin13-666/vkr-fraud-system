@@ -38,12 +38,38 @@ def _fmt(x: Any, nd: int = 6) -> str:
     except Exception:
         return str(x)
 
+def _get_first(d: Dict[str, Any], keys: List[str], default=None):
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return default
+
+def _render_split_info(split_info: Dict[str, Any]) -> Dict[str, Any]:
+    # sizes
+    train_size = _get_first(split_info, ["train_size", "n_train", "train_rows"])
+    val_size   = _get_first(split_info, ["val_size", "n_val", "val_rows"])
+    test_size  = _get_first(split_info, ["test_size", "n_test", "test_rows"])
+
+    # fraud rates
+    train_fr = _get_first(split_info, ["train_fraud_rate", "fraud_rate_train"])
+    val_fr   = _get_first(split_info, ["val_fraud_rate", "fraud_rate_val"])
+    test_fr  = _get_first(split_info, ["test_fraud_rate", "fraud_rate_test"])
+
+    return {
+        "train_size": train_size,
+        "val_size": val_size,
+        "test_size": test_size,
+        "train_fraud_rate": train_fr,
+        "val_fraud_rate": val_fr,
+        "test_fraud_rate": test_fr,
+    }
 
 def _df_to_html(df: pd.DataFrame, max_rows: int = 50) -> str:
     d = df.copy()
     if len(d) > max_rows:
         d = d.head(max_rows)
-    return d.to_html(index=False, escape=False)
+    html = d.to_html(index=False, escape=False)
+    return f"<div class='table-wrap'>{html}</div>"
 
 
 def _norm_path(p: Path) -> str:
@@ -226,12 +252,13 @@ def main() -> None:
 
     # ---- Collect metrics
     blocks: List[ModelBlock] = []
-    blocks.append(_extract_metrics_fusion_external(eval_dir))
+
     blocks.append(_extract_metrics(eval_dir, "tabular", "Tabular (LightGBM)", "tabular_metrics.json"))
     blocks.append(_extract_metrics_graph_metrics(eval_dir))
     blocks.append(_extract_metrics_gnn_internal(eval_dir))
-    blocks.append(_extract_metrics_fusion_internal(eval_dir))
     blocks.append(_extract_metrics_gnn_external(eval_dir))
+    blocks.append(_extract_metrics_fusion_internal(eval_dir))
+    blocks.append(_extract_metrics_fusion_external(eval_dir))
     blocks = [b for b in blocks if b is not None]
 
     if not blocks:
@@ -240,6 +267,13 @@ def main() -> None:
     comp = _build_comparison_table(blocks)
     comp_path = tables_dir / "model_comparison.csv"
     comp.to_csv(comp_path, index=False)
+    # --- copy robustness CSV to reports/tables (if exists)
+    rob_csv = eval_dir / "robustness" / "graph_robustness.csv"
+    if rob_csv.exists():
+        shutil.copy2(rob_csv, tables_dir / "graph_robustness.csv")
+    rob_raw_csv = eval_dir / "robustness" / "graph_robustness_raw.csv"
+    if rob_raw_csv.exists():
+        shutil.copy2(rob_raw_csv, tables_dir / "graph_robustness_raw.csv")
 
     # ---- Copy figures
     figures_to_copy = [
@@ -265,7 +299,14 @@ def main() -> None:
         ("shap_summary_beeswarm.png", "shap_summary_beeswarm.png"),
 
         ("gnn_ablation_pr_auc_vs_layers.png", "gnn_ablation_pr_auc_vs_layers.png"),
+        ("robustness/graph_robustness_external_pr_auc_vs_drop.png", "graph_robustness_external_pr_auc_vs_drop.png"),
+        ("robustness/graph_robustness_internal_pr_auc_vs_drop.png", "graph_robustness_internal_pr_auc_vs_drop.png"),
+        ("robustness/graph_robustness_pr_auc_vs_drop.png", "graph_robustness_pr_auc_vs_drop.png"),
     ]
+
+    # optional graph viz
+    graph_html_src = Path("artifacts/graph/graph.html")
+    _safe_copy(graph_html_src, assets_dir / "graph.html")
 
     copied_figs: List[str] = []
     for src_name, dst_name in figures_to_copy:
@@ -292,11 +333,22 @@ def main() -> None:
     # ---------
     # GNN Ablation (A5.2)
     # ---------
+    # --- Experiments: GNN ablation & Graph robustness ---
     ablation_csv = eval_dir / "gnn_ablation.csv"
-    ablation_png = assets_dir / "gnn_ablation_pr_auc_vs_layers.png"
+    ablation_fig = eval_dir / "gnn_ablation_pr_auc_vs_layers.png"
+
+    rob_fig_asset = assets_dir / "graph_robustness_pr_auc_vs_drop.png"
+    rob_df = pd.read_csv(rob_csv) if rob_csv.exists() else None
 
     # ---- Data/split block (VKR-friendly)
-    split_info = _read_json(Path("data/splits/split_info.json")) or {}
+    split_src = Path("data/splits/split_info.json")
+    split_info_raw = _read_json(split_src) or {}
+    split_info = _render_split_info(split_info_raw)
+
+    # копируй в reports/tables чтобы ссылка была внутри reports
+    if split_src.exists():
+        shutil.copy2(split_src, tables_dir / "split_info.json")
+
     split_html = ""
     if split_info:
         split_html = f"""
@@ -321,7 +373,7 @@ def main() -> None:
             </div>
           </div>
           <div class="muted small">
-            source: {_link(Path("data/splits/split_info.json"), "data/splits/split_info.json", report_dir=reports_dir)}
+            source: {_link(tables_dir / "split_info.json", "tables/split_info.json", report_dir=reports_dir)}
           </div>
         </div>
         """
@@ -346,6 +398,7 @@ def main() -> None:
       .pill { display:inline-block; padding:2px 8px; border-radius: 999px; border: 1px solid #ddd; background:#fafafa; }
       .toc a { text-decoration: none; }
       .toc li { margin: 4px 0; }
+      th, td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
     </style>
     """
 
@@ -356,27 +409,89 @@ def main() -> None:
     git_hash = _git_commit_short() or "n/a"
     freeze = _pip_freeze_short()
 
-    ablation_html = ""
-    if ablation_csv.exists():
-        try:
-            df_ab = pd.read_csv(ablation_csv)
-            ablation_html = f"""
-                <div class='card' id='ablation'>
-                  <h2>GNN Ablation (A5.2)</h2>
-                  <div class='muted small'>
-                    source: {_link(ablation_csv, ablation_csv.name, report_dir=reports_dir)}
-                  </div>
-                  {_df_to_html(df_ab, max_rows=50)}
-                  {"<h3>PR-AUC vs num_layers</h3>" + _img("gnn_ablation_pr_auc_vs_layers.png") if ablation_png.exists() else ""}
-                </div>
-                """
-        except Exception:
-            ablation_html = f"""
-                <div class='card' id='ablation'>
-                  <h2>GNN Ablation (A5.2)</h2>
-                  <div class='muted'>Failed to read: {_norm_path(ablation_csv)}</div>
-                </div>
-                """
+    # ---------
+    # Experiments section (A5.2 + A4.4)
+    # ---------
+    exp_parts: List[str] = []
+    exp_parts.append("<div class='card' id='experiments'>")
+    exp_parts.append("<h2>Experiments: Ablation & Robustness</h2>")
+    exp_parts.append("""
+    <div class='muted'>
+      <b>Смысл эксперимента:</b> искусственно удаляем долю рёбер (edge dropout), моделируя неполноту/ошибки связей в графе.
+      Оценка приводится в <b>external (future split)</b> режиме и (если настроено) усредняется по нескольким seed для устойчивости.
+    </div>
+    """)
+    exp_parts.append(
+        "<div class='muted'>Короткие эксперименты для обоснования параметров GNN и оценки устойчивости к деградации графа.</div>")
+
+    ablation_fig_asset = assets_dir / "gnn_ablation_pr_auc_vs_layers.png"
+    rob_main_asset = assets_dir / "graph_robustness_pr_auc_vs_drop.png"
+    rob_internal_asset = assets_dir / "graph_robustness_internal_pr_auc_vs_drop.png"
+    rob_external_asset = assets_dir / "graph_robustness_external_pr_auc_vs_drop.png"
+
+    # --- Ablation table + plot ---
+    if ablation_csv.exists() or ablation_fig.exists():
+        exp_parts.append("<h3>GNN Ablation (A5.2)</h3>")
+        exp_parts.append("<div class='grid'>")
+        if ablation_fig_asset.exists():
+            exp_parts.append(f"<img src='{_rel_href(ablation_fig_asset, report_dir=reports_dir)}' />")
+
+        if ablation_fig.exists():
+            exp_parts.append(
+                f"<div class='card'><h4>PR-AUC vs layers</h4><img src='{_rel_href(ablation_fig, report_dir=reports_dir)}' /></div>"
+            )
+        else:
+            exp_parts.append(
+                "<div class='card'><h4>PR-AUC vs layers</h4><div class='muted'>Plot not found.</div></div>")
+
+        if ablation_csv.exists():
+            try:
+                df_ab = pd.read_csv(ablation_csv).sort_values("val_pr_auc", ascending=False).head(12)
+                exp_parts.append("<div class='card'><h4>Top runs</h4>")
+                exp_parts.append(_df_to_html(df_ab, max_rows=12))
+                exp_parts.append(
+                    f"<div class='muted small'>source: {_link(ablation_csv, ablation_csv.name, report_dir=reports_dir)}</div>")
+                exp_parts.append("</div>")
+            except Exception:
+                exp_parts.append(
+                    f"<div class='card'><h4>Top runs</h4><div class='muted'>Failed to read: {_norm_path(ablation_csv)}</div></div>")
+        else:
+            exp_parts.append("<div class='card'><h4>Top runs</h4><div class='muted'>CSV not found.</div></div>")
+
+        exp_parts.append("</div>")  # grid
+
+    # --- Robustness table + plot ---
+    if rob_csv.exists() or rob_fig_asset.exists():
+        exp_parts.append("<h3>Graph Robustness: edge dropout (A4.4)</h3>")
+        exp_parts.append("<div class='grid'>")
+
+        if rob_fig_asset.exists():
+            exp_parts.append(
+                f"<div class='card'><h4>PR-AUC vs edge drop%</h4><img src='{_rel_href(rob_fig_asset, report_dir=reports_dir)}' /></div>"
+            )
+        else:
+            exp_parts.append(
+                "<div class='card'><h4>PR-AUC vs edge drop%</h4><div class='muted'>Plot not found.</div></div>"
+            )
+
+        if rob_csv.exists():
+            try:
+                df_rb = pd.read_csv(rob_csv).sort_values("drop_pct")
+                exp_parts.append("<div class='card'><h4>Summary table</h4>")
+                exp_parts.append(_df_to_html(df_rb, max_rows=50))
+                exp_parts.append(
+                    f"<div class='muted small'>source: {_link(rob_csv, rob_csv.name, report_dir=reports_dir)}</div>")
+                exp_parts.append("</div>")
+            except Exception:
+                exp_parts.append(
+                    f"<div class='card'><h4>Summary table</h4><div class='muted'>Failed to read: {_norm_path(rob_csv)}</div></div>")
+        else:
+            exp_parts.append("<div class='card'><h4>Summary table</h4><div class='muted'>CSV not found.</div></div>")
+
+        exp_parts.append("</div>")  # grid
+
+    exp_parts.append("</div>")  # card
+    experiments_html = "\n".join(exp_parts)
 
     meta_html = f"""
     <div class="card" id="meta">
@@ -540,6 +655,14 @@ def main() -> None:
         + "</div>"
     )
 
+    rob_raw_csv_rep = tables_dir / "graph_robustness_raw.csv"
+    rob_raw_df = pd.read_csv(rob_raw_csv_rep) if rob_raw_csv_rep.exists() else None
+
+    if rob_raw_df is not None:
+        exp_parts.append("<details><summary>Raw (per-seed) results</summary>")
+        exp_parts.append(_df_to_html(rob_raw_df, max_rows=50))
+        exp_parts.append("</details>")
+
     # Graph section
     graph_html_path = assets_dir / "graph.html"
     if graph_html_path.exists():
@@ -572,7 +695,7 @@ def main() -> None:
         <li><a href="#comparison">Сравнение моделей</a></li>
         <li><a href="#graph">Визуализация графа</a></li>
         <li><a href="#meta">Воспроизводимость</a></li>
-        <li><a href="#ablation">Абляции GNN</a></li>
+        <li><a href="#experiments">Experiments (A5.2 / A4.4)</a></li>
       </ul>
     </div>
     """
@@ -626,7 +749,7 @@ def main() -> None:
         <h2>PR-кривые</h2>
         <div class="grid">{pr_figs_html}</div>
         
-        {ablation_html}
+        {experiments_html}
         
         <h2>Политика порогов</h2>
         {thr_html}

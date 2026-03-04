@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 from pathlib import Path
 
@@ -13,10 +14,13 @@ from fraud_system.evaluation.calibration import fit_temperature_on_logits, apply
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+def _dir_from_env(env_name: str, default: str) -> Path:
+    v = os.environ.get(env_name, "").strip()
+    return Path(v) if v else Path(default)
 
 def main() -> None:
-    eval_dir = Path("artifacts/evaluation")
-    out_dir = Path("artifacts/graph")
+    eval_dir = _dir_from_env("FRAUD_EVAL_DIR", "artifacts/evaluation")
+    out_dir = _dir_from_env("FRAUD_GRAPH_DIR", "artifacts/graph")
     _ensure_dir(eval_dir)
     _ensure_dir(out_dir)
 

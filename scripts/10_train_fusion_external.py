@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import os
 from typing import Any, Dict, Tuple
 
 import numpy as np
@@ -15,6 +16,9 @@ from fraud_system.evaluation.plots import plot_pr_curve
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+def _dir_from_env(env_name: str, default: str) -> Path:
+    v = os.environ.get(env_name, "").strip()
+    return Path(v) if v else Path(default)
 
 def _norm(p: Path) -> str:
     """Normalize path for reports/json (Windows -> POSIX-like)."""
@@ -109,9 +113,10 @@ def _metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
 
 
 def main() -> None:
-    eval_dir = Path("artifacts/evaluation")
+    eval_dir = _dir_from_env("FRAUD_EVAL_DIR", "artifacts/evaluation")
     fusion_dir = Path("artifacts/fusion")
     _ensure_dir(fusion_dir)
+    _ensure_dir(eval_dir)
 
     # -------------------------
     # Load predictions
